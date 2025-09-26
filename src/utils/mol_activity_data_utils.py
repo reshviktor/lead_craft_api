@@ -35,9 +35,17 @@ will be better for optimisation/next steps
     return active/inactive/unknown status, scores, docking files, and images
     (if possible).
 3. Make proposals for lead compound optimisation.
+
+IMPORTANT todos list:
+TODO add logger
+TODO add tests
+TODO add docker
+TODO add ci/cd
+TODO add readme
+TODO add example jupiter notebook
 """
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Union, List
 from chembl_webresource_client.new_client import new_client
 import pandas as pd
 import re
@@ -76,7 +84,8 @@ def find_targets(query: str, organism="Homo sapiens", limit=None):
 
 def get_activities_for_target(target_chembl_id: str,
                               types=("IC50", "Ki", "Kd", "EC50"),
-                              ) -> list[dict[str, str]]:
+                              as_dataframe: bool = True,
+                              ) -> Union[pd.DataFrame, List[dict]]:
     act = new_client.activity
     fields = [
         "activity_id", "assay_chembl_id", "assay_type", "assay_confidence_score",
@@ -89,7 +98,29 @@ def get_activities_for_target(target_chembl_id: str,
         standard_type__in=list(types)
     ).only(fields)
     data = list(q)
+
+    if as_dataframe:
+        if not data:
+            return pd.DataFrame(columns=fields)
+        df = pd.DataFrame(data)
+        return df
     return data
+
+
+def combine_activities_for_targets(target_ids: List[str],
+                                   types=("IC50", "Ki", "Kd", "EC50"),
+                                   ) -> pd.DataFrame:
+    all_activities = []
+
+    for i, target_id in enumerate(target_ids):
+        activities_df = get_activities_for_target(target_id, types=types, as_dataframe=True)
+        if not activities_df.empty:
+            all_activities.append(activities_df)
+
+    if not all_activities:
+        raise ValueError("No activities found")
+    combined_df = pd.concat(all_activities, ignore_index=True)
+    return combined_df
 
 
 def standard_unit_convertor_to_pchembl(units: str, value: float) -> float:
