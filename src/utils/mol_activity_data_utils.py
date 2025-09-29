@@ -3,10 +3,10 @@
 2. Generate activities using get_activities_for_target for every target
     and save them in the combined list of all activities for every target
     using combine_activities_for_target
-    TODO write combine_activities_for_target
+    TODO_ write combine_activities_for_target (DONE)
 3. Create a dataframe from the combined activities list and filter it to
     remove duplicates
-    TODO get_activities_for_target needs to be rewritten to make a dataframe earlier
+    TODO_ get_activities_for_target needs to be rewritten to make a dataframe earlier (done)
     TODO write filter_duplicated_activities to filter duplicates
 4. Generate pchembl values and save them in a separate column
     TODO rewrite pchembl_extractor to work with a dataframe
@@ -120,6 +120,8 @@ def combine_activities_for_targets(target_ids: List[str],
     if not all_activities:
         raise ValueError("No activities found")
     combined_df = pd.concat(all_activities, ignore_index=True)
+    combined_df = combined_df.drop_duplicates(
+        subset=["target_chembl_id", "assay_chembl_id", "molecule_chembl_id", "standard_type", "relation"])
     return combined_df
 
 
