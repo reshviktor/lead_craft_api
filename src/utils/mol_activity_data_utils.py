@@ -241,3 +241,58 @@ def similarity_column_generation(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["similarity"] = df["smiles"].apply(similarity_search_for_query, axis=1)
     return df
+
+
+def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict[str, str]]:
+    assays = activities_df["assay_chembl_id"].dropna().unique().tolist()
+    all_assays_info = list(new_client.assay.filter(assay_chembl_id__in=assays)
+    .only(
+        ["assay_chembl_id", "assay_cell_type", "bao_label"]))
+    return all_assays_info
+
+
+def assay_type_auxiliary(assay_info: dict[str, str]) -> Optional[str]:
+    fmt = (assay_info.get("bao_label")).lower()
+    BAO_TO_CONTEXT = {
+        "cell-based format": "cellular",
+        "organism-based format": "organism",
+        "single protein format": "biochemical",
+        "protein format": "biochemical",
+        "cell-free format": "biochemical",
+        "cell membrane format": "cellular",
+        "subcellular format": "cellular",
+        "assay format": None,
+    }
+    content = BAO_TO_CONTEXT.get(fmt)
+    if not content and assay_info.get("assay_cell_type"):
+        return "cellular"
+    return BAO_TO_CONTEXT.get(fmt)
+
+
+def certain_activity_mapper(all_assays_info: list[dict[str, str]]) -> dict[str, Optional[str]]:
+    assay_type = dict()
+    for assay_info in all_assays_info:
+        if assay_info.get("assay_chembl_id") and assay_info.get("assay_chembl_id") not in assay_type.keys():
+            assay_type[assay_info["assay_chembl_id"]] = assay_type_auxiliary(assay_info)
+    return assay_type
+
+
+def assay_exact_type_generator(activities: pd.DataFrame) -> pd.DataFrame:
+    df = activities.copy()
+    all_assays_info = assay_info_extractor(df)
+    ctx_map = certain_activity_mapper(all_assays_info)
+    df["context"] = df["assay_chembl_id"].map(ctx_map)
+    return df
+
+
+def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFrame:
+    df = activities.copy()
+    stype = df["standard_type"].astype(str).str.upper()
+    atype = df["assay_type"].astype(str).str.upper()
+    unknown = df["context"].isna()
+    df.loc[unknown & stype.isin(["KI", "KD"]), "context"] = "biochemical"
+    df.loc[unknown & (atype == "F") & (stype == "EC50"), "context"] = "cellular"
+    df.loc[unknown & (atype == "B") & (stype == "IC50"), "context"] = "biochemical"
+    print("KI/KD sum:", (unknown & stype.isin(["KI","KD"])).sum())
+    print("F+EC50 sum:", (unknown & (atype=="F") & (stype=="EC50")).sum())
+    return df
