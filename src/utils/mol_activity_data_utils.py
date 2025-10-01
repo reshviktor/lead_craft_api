@@ -7,13 +7,13 @@
 3. Create a dataframe from the combined activities list and filter it to
     remove duplicates
     TODO_ get_activities_for_target needs to be rewritten to make a dataframe earlier (done)
-    TODO write filter_duplicated_activities to filter duplicates
+    TODO_ write filter_duplicated_activities to filter duplicates
 4. Generate pchembl values and save them in a separate column
-    TODO rewrite pchembl_extractor to work with a dataframe
-    TODO write activities_df_clean_up to drop unimportant columns
+    TODO_ rewrite pchembl_extractor to work with a dataframe
+    TODO_ write activities_df_clean_up to drop unimportant columns
 5. Fetch smiles and save them in a separate column using the attach_smiles function
 6. Generate "is_active" column using activity_status_generator
-    TODO write activity_status_generator
+    _TODO write activity_status_generator
 7. Make a function to save a dataframe with activities to the SQL db (SQLite) and
     extract it from the database
     TODO write save_to_SQL and extract_from_SQL
@@ -44,8 +44,7 @@ TODO add ci/cd
 TODO add readme
 TODO add example jupiter notebook
 """
-
-from typing import Optional, Callable, Union, List
+from typing import Optional, Callable, List
 from chembl_webresource_client.new_client import new_client
 import pandas as pd
 import re
@@ -67,14 +66,14 @@ def find_targets(query: str, organism="Homo sapiens", limit=None):
     t = new_client.target
     hits = t.search(query)
     rows = []
-    for h in hits:
-        if organism and h.get("organism") == organism:
+    for hit in hits:
+        if organism and hit.get("organism") == organism:
             rows.append(
                 {
-                    "target_chembl_id": h["target_chembl_id"],
-                    "pref_name": h.get("pref_name"),
-                    "organism": h.get("organism"),
-                    "target_type": h.get("target_type"),
+                    "target_chembl_id": hit["target_chembl_id"],
+                    "pref_name": hit.get("pref_name"),
+                    "organism": hit.get("organism"),
+                    "target_type": hit.get("target_type"),
                 }
             )
             if limit and len(rows) >= limit:
@@ -84,8 +83,7 @@ def find_targets(query: str, organism="Homo sapiens", limit=None):
 
 def get_activities_for_target(target_chembl_id: str,
                               types=("IC50", "Ki", "Kd", "EC50"),
-                              as_dataframe: bool = True,
-                              ) -> Union[pd.DataFrame, List[dict]]:
+                              ) -> List[dict]:
     act = new_client.activity
     fields = [
         "activity_id", "assay_chembl_id", "assay_type", "assay_confidence_score",
@@ -93,36 +91,26 @@ def get_activities_for_target(target_chembl_id: str,
         "standard_type", "standard_value", "standard_units", "relation",
         "pchembl_value", "target_chembl_id"
     ]
-    q = act.filter(
+    activities_found = act.filter(
         target_chembl_id=target_chembl_id,
         standard_type__in=list(types)
     ).only(fields)
-    data = list(q)
-
-    if as_dataframe:
-        if not data:
-            return pd.DataFrame(columns=fields)
-        df = pd.DataFrame(data)
-        return df
-    return data
+    activities = list(activities_found)
+    return activities
 
 
 def combine_activities_for_targets(target_ids: List[str],
                                    types=("IC50", "Ki", "Kd", "EC50"),
-                                   ) -> pd.DataFrame:
+                                   ) -> list[dict[str, Optional[str]]]:
     all_activities = []
 
     for i, target_id in enumerate(target_ids):
-        activities_df = get_activities_for_target(target_id, types=types, as_dataframe=True)
-        if not activities_df.empty:
-            all_activities.append(activities_df)
-
+        activities = get_activities_for_target(target_id, types=types)
+        if activities:
+            all_activities.extend(activities)
     if not all_activities:
         raise ValueError("No activities found")
-    combined_df = pd.concat(all_activities, ignore_index=True)
-    combined_df = combined_df.drop_duplicates(
-        subset=["target_chembl_id", "assay_chembl_id", "molecule_chembl_id", "standard_type", "relation"])
-    return combined_df
+    return all_activities
 
 
 def standard_unit_convertor_to_pchembl(units: str, value: float) -> float:
@@ -169,7 +157,10 @@ def activities_to_dataframe(activities: list[dict[str, Optional[str]]]) -> pd.Da
                                    "activity_id",
                                    "assay_chembl_id",
                                    "assay_type",
+                                   "standard_type",
+                                   "relation",
                                    ]]
+    activities_df = activities_df.drop_duplicates()
     activities_df["pchembl_value"] = [pchembl_extractor(activity_entry) for activity_entry in activities]
     return activities_df
 
@@ -293,6 +284,44 @@ def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFram
     df.loc[unknown & stype.isin(["KI", "KD"]), "context"] = "biochemical"
     df.loc[unknown & (atype == "F") & (stype == "EC50"), "context"] = "cellular"
     df.loc[unknown & (atype == "B") & (stype == "IC50"), "context"] = "biochemical"
-    print("KI/KD sum:", (unknown & stype.isin(["KI","KD"])).sum())
-    print("F+EC50 sum:", (unknown & (atype=="F") & (stype=="EC50")).sum())
     return df
+
+
+def activity_status(activities: pd.DataFrame) -> pd.DataFrame:
+    THRESHOLD_ACTIVE = {
+        "biochemical": 6.0,  # <= 1 µM
+        "cellular": 5.0,  # <= 10 µM
+        "organism": 4.5,  # <= ~33 µM
+        "unknown": 6.0,  # same as the worst (<= 1 µM)
+    }
+    ALLOWED_REL = {
+        "=", "~", None, "<", "<="
+
+    }
+    out = activities.copy()
+    out["pchembl_value"] = pd.to_numeric(out["pchembl_value"], errors="coerce")
+    ctx = out.get("context", pd.Series(index=out.index, dtype=object)).fillna("unknown").astype(str)
+    cutoff = ctx.map(THRESHOLD_ACTIVE).fillna(THRESHOLD_ACTIVE["unknown"])
+    rel_ok = out.get("relation", pd.Series(index=out.index, dtype=object)).isin(ALLOWED_REL)
+    out["is_active"] = (out["pchembl_value"] >= cutoff) & rel_ok
+    return out
+
+
+def main_generator(query: str) -> pd.DataFrame:
+    targets = find_targets(query)
+    print(targets)
+    combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist())
+    print(combined_activities[0:3])
+    activities = activities_to_dataframe(combined_activities)
+    print(activities.head())
+    activities_with_smiles = attach_smiles(activities)
+    print(activities_with_smiles.head())
+    activities_with_exact_assays = assay_exact_type_generator(activities_with_smiles)
+    print(activities_with_exact_assays.head())
+    activities_with_all_assays = assay_approx_type_generator_for_row(activities_with_exact_assays)
+    print(activities_with_all_assays.head())
+    activities_all = activity_status(activities_with_all_assays)
+    print(activities_all.head())
+    return activities_all[
+        ["molecule_chembl_id", "activity_id", "assay_chembl_id", "pchembl_value", "context", "canonical_smiles",
+         "is_active"]]
