@@ -43,17 +43,28 @@ TODO add docker
 TODO add ci/cd
 TODO add readme
 TODO add example jupiter notebook
+
+TODO check if all return targets are relevant to the query
 """
+
+"""
+Molecular Activity Data Utilities
+
+This module provides utilities for fetching, processing, and analyzing molecular activity data
+from ChEMBL database, including target search, activity retrieval, and bioactivity classification.
+"""
+
 from typing import Optional, Callable, List
 from chembl_webresource_client.new_client import new_client
-import pandas as pd
-import re
-import math
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs, rdMolDescriptors
 from functools import partial
+import pandas as pd
+import re
+import math
+import logging
 
-UNIT_FACTORS = {  # TODO create and save in constants.py file
+UNIT_FACTORS = {  # Unit conversion concentration to standart molar
     "m": 1.0,
     "mm": 1e-3,
     "um": 1e-6,
@@ -61,6 +72,47 @@ UNIT_FACTORS = {  # TODO create and save in constants.py file
     "pm": 1e-12,
 }
 
+
+def find_targets(query: str, organism: str = "Homo sapiens", limit: Optional[int] = None) -> pd.DataFrame:
+    """
+    Search for biological targets in ChEMBL database matching the query.
+
+    Args:
+        query: Search term
+        organism: Organism filter (default: "Homo sapiens")
+        limit: Maximum number of results to return
+
+    Returns:
+        DataFrame with columns: target_chembl_id, pref_name, organism, target_type
+
+    Example:
+        >>> targets = find_targets("CDK2", limit=5)
+        >>> print(targets['target_chembl_id'].tolist())
+    """
+    logger.info(f"Searching for targets with query: '{query}', organism: '{organism}', limit: {limit}")
+
+    try:
+        t = new_client.target
+        hits = t.search(query)
+        rows = []
+
+        for hit in hits:
+            if organism and hit.get("organism") == organism:
+                rows.append({
+                    "target_chembl_id": hit["target_chembl_id"],
+                    "pref_name": hit.get("pref_name"),
+                    "organism": hit.get("organism"),
+                    "target_type": hit.get("target_type"),
+                })
+                if limit and len(rows) >= limit:
+                    break
+
+        logger.info(f"Found {len(rows)} targets matching criteria")
+        return pd.DataFrame(rows)
+
+    except Exception as e:
+        logger.error(f"Error searching for targets: {e}")
+        raise
 
 def find_targets(query: str, organism="Homo sapiens", limit=None):
     t = new_client.target
