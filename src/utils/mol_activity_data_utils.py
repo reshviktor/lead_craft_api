@@ -1,22 +1,4 @@
 """The workflow process so far:
-1. Generate a list of all target IDs by using find_targets
-2. Generate activities using get_activities_for_target for every target
-    and save them in the combined list of all activities for every target
-    using combine_activities_for_target
-    TODO_ write combine_activities_for_target (DONE)
-3. Create a dataframe from the combined activities list and filter it to
-    remove duplicates
-    TODO_ get_activities_for_target needs to be rewritten to make a dataframe earlier (done)
-    TODO_ write filter_duplicated_activities to filter duplicates
-4. Generate pchembl values and save them in a separate column
-    TODO_ rewrite pchembl_extractor to work with a dataframe
-    TODO_ write activities_df_clean_up to drop unimportant columns
-5. Fetch smiles and save them in a separate column using the attach_smiles function
-6. Generate "is_active" column using activity_status_generator
-    _TODO write activity_status_generator
-7. Make a function to save a dataframe with activities to the SQL db (SQLite) and
-    extract it from the database
-    TODO write save_to_SQL and extract_from_SQL
 8. Add a "similarity" column and fill it using search_smiles from the user query
     and dataframe from SQL similarity_column_generation
 9. Filter the dataframe by the "similarity" column and give if there are >= 5
@@ -64,6 +46,14 @@ import re
 import math
 import logging
 
+# logger config and setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# constants
 UNIT_FACTORS = {  # Unit conversion concentration to standart molar
     "m": 1.0,
     "mm": 1e-3,
@@ -73,29 +63,28 @@ UNIT_FACTORS = {  # Unit conversion concentration to standart molar
 }
 
 
-def find_targets(query: str, organism: str = "Homo sapiens", limit: Optional[int] = None) -> pd.DataFrame:
+def find_targets(
+        query: str,
+        organism: str = "Homo sapiens",
+        limit: Optional[int] = None
+) -> pd.DataFrame:
     """
     Search for biological targets in ChEMBL database matching the query.
+    # see more here: https://github.com/chembl/chembl_webresource_client
 
     Args:
-        query: Search term
+        query: Search term, e.g. receptor or enzyme
         organism: Organism filter (default: "Homo sapiens")
         limit: Maximum number of results to return
 
     Returns:
         DataFrame with columns: target_chembl_id, pref_name, organism, target_type
-
-    Example:
-        >>> targets = find_targets("CDK2", limit=5)
-        >>> print(targets['target_chembl_id'].tolist())
     """
     logger.info(f"Searching for targets with query: '{query}', organism: '{organism}', limit: {limit}")
-
     try:
         t = new_client.target
         hits = t.search(query)
         rows = []
-
         for hit in hits:
             if organism and hit.get("organism") == organism:
                 rows.append({
@@ -109,131 +98,248 @@ def find_targets(query: str, organism: str = "Homo sapiens", limit: Optional[int
 
         logger.info(f"Found {len(rows)} targets matching criteria")
         return pd.DataFrame(rows)
-
     except Exception as e:
         logger.error(f"Error searching for targets: {e}")
         raise
 
-def find_targets(query: str, organism="Homo sapiens", limit=None):
-    t = new_client.target
-    hits = t.search(query)
-    rows = []
-    for hit in hits:
-        if organism and hit.get("organism") == organism:
-            rows.append(
-                {
-                    "target_chembl_id": hit["target_chembl_id"],
-                    "pref_name": hit.get("pref_name"),
-                    "organism": hit.get("organism"),
-                    "target_type": hit.get("target_type"),
-                }
-            )
-            if limit and len(rows) >= limit:
-                break
-    return pd.DataFrame(rows)
+
+def get_activities_for_target(
+        target_chembl_id: str,
+        types: tuple[str] = ("IC50", "Ki", "Kd", "EC50")
+) -> list[Optional[dict[str, str]]]:
+    """
+    Retrieve bioactivity data for a specific target from ChEMBL.
+
+    Args:
+        target_chembl_id: ChEMBL target identifier
+        types: Tuple of activity types to retrieve (default: IC50, Ki, Kd, EC50)
+
+    Returns:
+        List of activity dictionaries containing assay and measurement data
+    """
+    logger.info(f"Fetching activities for target: {target_chembl_id}, types: {types}")
+
+    try:
+        act = new_client.activity
+        fields = [
+            "activity_id", "assay_chembl_id", "assay_type", "assay_confidence_score",
+            "molecule_chembl_id", "standard_type", "standard_value", "standard_units",
+            "relation", "pchembl_value", "target_chembl_id"
+        ]
+        activities_found = act.filter(
+            target_chembl_id=target_chembl_id,
+            standard_type__in=list(types)
+        ).only(fields)
+        activities = list(activities_found)
+        logger.info(f"Retrieved {len(activities)} activities for {target_chembl_id}")
+        return activities
+
+    except Exception as e:
+        logger.error(f"Error fetching activities for {target_chembl_id}: {e}")
 
 
-def get_activities_for_target(target_chembl_id: str,
-                              types=("IC50", "Ki", "Kd", "EC50"),
-                              ) -> List[dict]:
-    act = new_client.activity
-    fields = [
-        "activity_id", "assay_chembl_id", "assay_type", "assay_confidence_score",
-        "molecule_chembl_id",
-        "standard_type", "standard_value", "standard_units", "relation",
-        "pchembl_value", "target_chembl_id"
-    ]
-    activities_found = act.filter(
-        target_chembl_id=target_chembl_id,
-        standard_type__in=list(types)
-    ).only(fields)
-    activities = list(activities_found)
-    return activities
+def combine_activities_for_targets(
+        target_ids: list[str],
+        types: tuple[str] = ("IC50", "Ki", "Kd", "EC50")
+) -> list[Optional[dict[str, str]]]:
+    """
+    Combines bioactivity data from multiple targets.
+    Args:
+        target_ids: List of ChEMBL target identifiers
+        types: Tuple of activity types to retrieve (default: IC50, Ki, Kd, EC50)
 
+    Returns:
+        Combined list of all activities from all targets
 
-def combine_activities_for_targets(target_ids: List[str],
-                                   types=("IC50", "Ki", "Kd", "EC50"),
-                                   ) -> list[dict[str, Optional[str]]]:
+    Raises:
+        ValueError: If no activities are found for any target
+    """
+    logger.info(f"Combining activities for {len(target_ids)} targets")
+
     all_activities = []
 
     for i, target_id in enumerate(target_ids):
+        logger.debug(f"Processing target {i + 1}/{len(target_ids)}: {target_id}")
         activities = get_activities_for_target(target_id, types=types)
         if activities:
             all_activities.extend(activities)
+
     if not all_activities:
+        logger.error("No activities found for any target")
         raise ValueError("No activities found")
+
+    logger.info(f"Combined {len(all_activities)} total activities from all targets")
     return all_activities
 
 
 def standard_unit_convertor_to_pchembl(units: str, value: float) -> float:
+    """
+    Convert activity value in various units to pChEMBL scale (-log10(Molar)).
+    Args:
+        units: Unit string (e.g., "nM", "uM", "mM")
+        value: Numeric activity value
+
+    Returns:
+        pChEMBL value (-log10 of molar concentration)
+
+    Raises:
+        ValueError: If value is non-positive or unit is unknown
+    Todo:
+        * now code raises ValueError if value is negative or unit is unknown -> better return None and log?
+    """
     if value <= 0:
+        logger.error(f"Invalid value for pChEMBL conversion: {value}")
         raise ValueError("value must be positive")
+
     u = units.strip().lower()
     u = u.replace("µ", "u")
     u = re.sub(r"\s+", "", u)
     u = u.replace("mol/l", "").replace("molperl", "")
 
-    if u in UNIT_FACTORS.keys():
-        standard_value = UNIT_FACTORS[units] * value
-        return - math.log10(standard_value)
+    if u in UNIT_FACTORS:
+        standard_value = UNIT_FACTORS[u] * value
+        pchembl = -math.log10(standard_value)
+        logger.info(f"Converted {value} {units} to pChEMBL {pchembl:.2f}")
+        return pchembl
     else:
+        logger.error(f"Unknown unit: {units}")
         raise ValueError(f"Unknown unit {units}")
 
 
-def pchembl_extractor(activity_entry: dict[str, str]) -> Optional[float]:
+def pchembl_extractor(activity_entry: dict) -> Optional[float]:
+    """
+    Extract or calculate pChEMBL value from activity data.
+
+    The workflow utilizes the following stratagies stratagies:
+    use existing pchembl_value if available; not available? -> calculate from standard_value/value or return None
+
+    Args:
+        activity_entry: ChEMBL dictionary containing activity data
+
+    Returns:
+        pChEMBL value or None if cannot be determined
+    """
     if activity_entry.get("pchembl_value"):
-        return float(activity_entry["pchembl_value"])
-    if activity_entry.get("standard_value") and activity_entry["standard_value"].isnumeric():
+        try:
+            pchembl_value = float(activity_entry["pchembl_value"])
+        except ValueError as e:
+            logger.debug(f"pchembl_value is not possible to convert to float:{e}")
+        else:
+            return pchembl_value
+
+    if (activity_entry.get("standard_value") and str(activity_entry["standard_value"]).
+            replace('.', '', 1).isdigit()):
         units = activity_entry.get("standard_units")
         if units:
-            return standard_unit_convertor_to_pchembl(units=units,
-                                                      value=float
-                                                      (activity_entry["standard_value"])
-                                                      )
+            try:
+                pchembl_value_su = standard_unit_convertor_to_pchembl(
+                    units=units,
+                    value=float(activity_entry["standard_value"])
+                )
+            except (ValueError, KeyError) as e:
+                logger.debug(f"Could not convert standard_value: {e}")
+            else:
+                return pchembl_value_su
 
-    if activity_entry.get("value") and activity_entry["value"].isnumeric():
+    if activity_entry.get("value") and str(activity_entry["value"]).replace('.', '', 1).isdigit():
         units = activity_entry.get("units")
         if units:
-            return standard_unit_convertor_to_pchembl(units=units,
-                                                      value=float(activity_entry["value"])
-                                                      )
+            try:
+                pchembl_value_u = standard_unit_convertor_to_pchembl(
+                    units=units,
+                    value=float(activity_entry["value"])
+                )
+            except (ValueError, KeyError) as e:
+                logger.debug(f"Could not convert value: {e}")
+            else:
+                return pchembl_value_u
 
+    logger.debug(f"Could not extract pChEMBL for activity {activity_entry.get('activity_id')}")
     return None
 
 
-def activities_to_dataframe(activities: list[dict[str, Optional[str]]]) -> pd.DataFrame:
+def activities_to_dataframe(activities: list[dict[str, str]]) -> pd.DataFrame:
+    """
+    Convert list of activity dictionaries to DataFrame, cut off non-essential columns and
+     generate pChEMBL values.
+    Args:
+        activities: list of activity dictionaries from ChEMBL
+    Returns:
+        DataFrame with activities (without duplicated) and calculated pChEMBL values
+    Raises:
+        ValueError: If activities list is empty
+    """
+    logger.info(f"Converting {len(activities)} activities to DataFrame")
+
     if not activities:
+        logger.error("Cannot create DataFrame from empty activities list")
         raise ValueError("No activities found")
-    activities_df = pd.DataFrame(activities, index=None)
-    activities_df = activities_df[["molecule_chembl_id",
-                                   "activity_id",
-                                   "assay_chembl_id",
-                                   "assay_type",
-                                   "standard_type",
-                                   "relation",
-                                   ]]
-    activities_df = activities_df.drop_duplicates()
-    activities_df["pchembl_value"] = [pchembl_extractor(activity_entry) for activity_entry in activities]
-    return activities_df
+
+    try:
+        activities_df = pd.DataFrame(activities, index=None)
+        final_cols = [
+            "molecule_chembl_id", "activity_id", "assay_chembl_id",
+            "assay_type", "standard_type", "relation"
+        ]
+        activities_df = activities_df[final_cols]
+        activities_df["pchembl_value"] = [pchembl_extractor(act) for act in activities]
+
+        before_dedup = len(activities_df)
+        activities_df = activities_df.drop_duplicates()
+        after_dedup = len(activities_df)
+        logger.info(f"Removed {before_dedup - after_dedup} duplicate activities")
+
+        valid_pchembl = activities_df["pchembl_value"].notna().sum()
+        logger.info(f"Successfully calculated pChEMBL for {valid_pchembl}/{len(activities_df)} activities")
+
+        return activities_df
+
+    except Exception as e:
+        logger.error(f"Error converting activities to DataFrame: {e}")
+        raise
 
 
-def attach_smiles(df: pd.DataFrame) -> pd.DataFrame:
-    mol = new_client.molecule
-    ids = df["molecule_chembl_id"].dropna().unique().tolist()
-    chunks = [ids[i:i + 100] for i in range(0, len(ids), 100)]
-    id_to_smiles = {}
-    for chunk in chunks:
-        mres = mol.filter(molecule_chembl_id__in=chunk).only(
-            ["molecule_chembl_id", "molecule_structures"]
-        )
-        for m in mres:
-            smi = None
-            if m.get("molecule_structures"):
-                smi = m["molecule_structures"].get("canonical_smiles")
-            id_to_smiles[m["molecule_chembl_id"]] = smi
-    df = df.copy()
-    df["canonical_smiles"] = df["molecule_chembl_id"].map(id_to_smiles)
-    return df
+def attach_smiles(df: pd.DataFrame, batch_size=100) -> pd.DataFrame:
+    """
+    Fetch and attach canonical SMILES strings to molecules in the DataFrame.
+    Retrieves SMILES from ChEMBL in batches of batch_size (default 100) for efficiency.
+    Args:
+        df: DataFrame with 'molecule_chembl_id' column
+    Returns:
+        DataFrame with added 'canonical_smiles' column
+    """
+    logger.info("Fetching SMILES strings for molecules")
+
+    try:
+        # mol = new_client.molecule
+        # ids = df["molecule_chembl_id"].dropna().unique().tolist()
+        # logger.info(f"Fetching SMILES for {len(ids)} unique molecules")
+        #
+        # chunks = [ids[i:i + batch_size] for i in range(0, len(ids), batch_size)]
+        # id_to_smiles = {}
+        #
+        # for idx, chunk in enumerate(chunks):
+        #     mres = mol.filter(molecule_chembl_id__in=chunk).only(
+        #         ["molecule_chembl_id", "molecule_structures"]
+        #     )
+        #     for m in mres:
+        #         smi = None
+        #         if m.get("molecule_structures"):
+        #             smi = m["molecule_structures"].get("canonical_smiles")
+        #         id_to_smiles[m["molecule_chembl_id"]] = smi
+
+        df = df.copy()
+        df["canonical_smiles"] = df["molecule_chembl_id"].map(id_to_smiles)
+
+        valid_smiles = df["canonical_smiles"].notna().sum()
+        logger.info(f"Successfully retrieved SMILES for {valid_smiles}/{len(df)} activities")
+
+        return df
+
+    except Exception as e:
+        logger.error(f"Error fetching SMILES: {e}")
+        raise
+
 
 
 def morgan_finger_prints_from_smiles(smiles: str):  # TODO: add return value
