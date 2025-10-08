@@ -19,7 +19,6 @@ will be better for optimisation/next steps
 3. Make proposals for lead compound optimisation.
 
 IMPORTANT todos list:
-TODO add logger
 TODO add tests
 TODO add docker
 TODO add ci/cd
@@ -39,8 +38,7 @@ from ChEMBL database, including target search, activity retrieval, and bioactivi
 from typing import Optional, Callable
 from chembl_webresource_client.new_client import new_client
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs, rdMolDescriptors
-from functools import partial
+from rdkit.Chem import DataStructs, rdMolDescriptors
 from logging.config import dictConfig
 import pandas as pd
 import re
@@ -145,8 +143,6 @@ def get_activities_for_target(
     Returns:
         List of activity dictionaries containing assay and measurement data
     """
-    logger.info(f"Fetching activities for target: {target_chembl_id}, types: {types}")
-
     try:
         act = new_client.activity
         fields = [
@@ -188,7 +184,7 @@ def combine_activities_for_targets(
     Raises:
         ValueError: If no activities are found for any target
     """
-    logger.info(f"Combining activities for {len(target_ids)} targets")
+    logger.info(f"Retrieving and combining activities for {len(target_ids)} targets")
 
     all_activities = []
 
@@ -203,19 +199,19 @@ def combine_activities_for_targets(
             key=lambda x: x[1],
             reverse=True
         )
-        logger.info(f"Retrieved activities from {len(sorted_targets)} targets:")
         targets_per_line = 5
+        lines = [f"Retrieved activities from {len(sorted_targets)} targets:"]
         for i in range(0, len(sorted_targets), targets_per_line):
             batch = sorted_targets[i:i + targets_per_line]
             line = ", ".join([f"{tid}: {count}" for tid, count in batch])
-            logger.info(f"  {line}")
+            lines.append(f"  {line}")
+        logger.info("\n".join(lines))
 
     logger.info(f"Found {len(all_activities)} activities combined")
     if not all_activities:
         logger.error("No activities found for any target")
         raise ValueError("No activities found")
 
-    logger.info(f"Combined {len(all_activities)} total activities from all targets")
     return all_activities
 
 
@@ -269,7 +265,7 @@ def pchembl_extractor(
     """
     Extract or calculate pChEMBL value from activity data.
 
-    The workflow utilizes the following stratagies stratagies:
+    The workflow utilizes the following strategies:
     use existing pchembl_value if available; not available? -> calculate from standard_value/value or return None
 
     Args:
@@ -319,7 +315,8 @@ def pchembl_extractor(
                 return pchembl_value_u
 
     logger.debug(f"Could not extract pchembl for activity {activity_entry.get('activity_id')}")
-    stats.no_activity += 1
+    if stats:
+        stats.no_activity += 1
     return None
 
 
@@ -377,8 +374,6 @@ def attach_smiles(
         raise
 
 
-# TODO Deduplication usually finds 0 compound, maybe
-
 def activities_to_dataframe(
         activities: list[dict[str, str]],
         stats: Optional[ConversionStatistics] = None,
@@ -407,20 +402,20 @@ def activities_to_dataframe(
         ]
         activities_df = activities_df[final_cols]
         activities_df = attach_smiles(activities_df)
-        activities_df["pchembl_value"] = [pchembl_extractor(act) for act in activities]
+        activities_df["pchembl_value"] = [pchembl_extractor(act, stats=stats) for act in activities]
 
-        # Here I need some statatistics
-        # if stats:
-        #     logger.info(f"pChEMBL extraction: {stats.no_pchembl_extracted} failed")
-        #     if stats.pchembl_zero_values > 0:
-        #         logger.warning(f"  Zero values skipped: {stats.pchembl_zero_values}")
-        #     if stats.pchembl_negative_values > 0:
-        #         logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
-        #     if stats.unknown_units:
-        #         logger.warning(f"  Unknown units found: {len(stats.unknown_units)} types")
-        #         sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
-        #         for unit, count in sorted_units[:5]:
-        #             logger.warning(f"    '{unit}': {count} occurrences")
+        if stats:
+            logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
+            logger.warning(f"  Unknown units found: {len(stats.unknown_units)} types")
+            if len(stats.unknown_units.items()) >= 1:
+                sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
+                units_per_line = 5
+                lines = [f"Unknown units found:"]
+                for i in range(0, len(sorted_units), units_per_line):
+                    batch = sorted_units[i:i + units_per_line]
+                    line = ", ".join([f"{unit}: {count}" for unit, count in batch])
+                    lines.append(f"  {line}")
+                logger.info("\n".join(lines))
 
         before_dupl_rem = len(activities_df)
         activities_df = activities_df.drop_duplicates()
@@ -437,69 +432,115 @@ def activities_to_dataframe(
         raise
 
 
-
-def morgan_finger_prints_from_smiles(smiles: str):  # TODO: add return value
-    mol = Chem.MolFromSmiles(smiles)
-    return AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048) if mol else None
-
-
-#
-# def add_mols_and_fps(
-#         df: pd.DataFrame,
-#         smiles_col: str = "canonical_smiles",
-#         mol_col: str = "mol",
-#         fp_col: str = "ecfp4"
-# ) -> pd.DataFrame:
-#     mols = []
-#     fps = []
-#     for smi in df[smiles_col].astype(str):
-#         m = Chem.MolFromSmiles(smi)
-#         mols.append(m)
-#         fps.append(AllChem.GetMorganFingerprintAsBitVect(m, radius=2, nBits=2048) if m else None)
-#     out = df.copy()
-#     out[mol_col] = mols
-#     out[fp_col] = fps
-#     out = out[out[mol_col].notna()].reset_index(drop=True)
-#     return out
-
-
 def similarity_tanimoto_search(
         mol_search: Chem.rdchem.Mol,
-        smiles_df: str) -> Optional[float]:
+        smiles_from_df: str
+) -> Optional[float]:
+    """
+    Calculate Tanimoto similarity between query molecule and target SMILES.
+    Uses MACCS keys fingerprints for similarity calculation.
+    Args:
+        mol_search: RDKit molecule object (query)/ mol is used not to convert many times same smiles to mol
+        smiles_from_df: SMILES string (target)/ smiles used not to generate column with data-heavy mol info
+    Returns:
+        Tanimoto similarity coefficient (0-1) or None if target is invalid
+    Raises:
+        ValueError: If search molecule is invalid
+    """
     if not mol_search:
+        logger.error("Invalid search molecule provided")
         raise ValueError("Invalid search SMILES")
-    mol_df = Chem.MolFromSmiles(smiles_df)
-    if not mol_df:
+
+    try:
+        molecule_from_df = Chem.MolFromSmiles(smiles_from_df)
+        if not molecule_from_df:
+            return None
+    except TypeError:
         return None
-    fp_search = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
-    fp_df = rdMolDescriptors.GetMACCSKeysFingerprint(mol_df)
-    return DataStructs.TanimotoSimilarity(fp_search, fp_df)
+
+    fingps_search_mol = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
+    fingps_for_df_mol = rdMolDescriptors.GetMACCSKeysFingerprint(molecule_from_df)
+
+    return DataStructs.TanimotoSimilarity(fingps_search_mol, fingps_for_df_mol)
 
 
 def similarity_search_for_query(smiles: str) -> Callable[[str], Optional[float]]:
+    """An auxiliary function to use similarity_tanimoto_search with dataframe map.
+    Args:
+        smiles: Query SMILES string
+    Returns:
+        Callable that calculates similarity to the query molecule or returns None if smiles str in df is invalid.
+    Raises:
+        ValueError: If query SMILES is invalid"""
     mol_search = Chem.MolFromSmiles(smiles)
     if not mol_search:
         raise ValueError("Invalid SMILES")
-    return partial(similarity_tanimoto_search, mol_search)
+    return lambda smi: similarity_tanimoto_search(mol_search, smi)
 
 
-def similarity_column_generation(df: pd.DataFrame) -> pd.DataFrame:
+def similarity_column_generation(
+        df: pd.DataFrame,
+        query_smiles: str,
+        smiles_col: str = "canonical_smiles"
+) -> pd.DataFrame:
+    """
+    Add tanimoto_similarity column to DataFrame based on query SMILES.
+    Args:
+        df: DataFrame with column containing activities of compounds and their SMILES string
+        query_smiles: Query molecule SMILES string
+        smiles_col: SMILES string column
+    Returns:
+        DataFrame copy with added 'tanimoto_similarity' column
+    """
+    logger.info(f"Generating similarity column for {query_smiles} smiles")
+    scorer = similarity_search_for_query(query_smiles)
     df = df.copy()
-    df["similarity"] = df["smiles"].apply(similarity_search_for_query, axis=1)
+    df["tanimoto_similarity"] = df[smiles_col].map(scorer)
+    tanimoto_sim_total = df["tanimoto_similarity"].notna().sum()
+    smiles_total = df[smiles_col].notna().sum()
+    logger.info(f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles")
+    if smiles_total > tanimoto_sim_total:
+        logger.warning("Not converted: {smiles_total - tanimoto_sim_total} smiles")
     return df
 
 
-def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict[str, str]]:
+def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict]:
+    """
+    Extract detailed assay information from ChEMBL for all unique assays.
+    Args:
+        activities_df: DataFrame with 'assay_chembl_id' column
+    Returns:
+        List of assay information dictionaries
+    """
     assays = activities_df["assay_chembl_id"].dropna().unique().tolist()
-    all_assays_info = list(new_client.assay.filter(assay_chembl_id__in=assays)
-    .only(
-        ["assay_chembl_id", "assay_cell_type", "bao_label"]))
-    return all_assays_info
+    logger.info(f"Extracting assay information for {len(assays)} unique assays")
+    try:
+        all_assays_info = list(
+            new_client.assay.filter(assay_chembl_id__in=assays)
+            .only(["assay_chembl_id", "assay_cell_type", "bao_label"])
+        )
+        logger.info(f"Retrieved information for {len(all_assays_info)} assays")
+        return all_assays_info
+
+    except Exception as e:
+        logger.error(f"Error extracting assay information: {e}")
+        raise
 
 
-def assay_type_auxiliary(assay_info: dict[str, str]) -> Optional[str]:
-    fmt = (assay_info.get("bao_label")).lower()
-    BAO_TO_CONTEXT = {
+def assay_type_auxiliary(assay_info: dict) -> Optional[str]:
+    """
+    Determine assay context (biochemical/cellular/organism) from BAO label and cell type.
+    Args:
+        assay_info: Dictionary with assay metadata including 'bao_label' and 'assay_cell_type'
+    Returns:
+        Context string: "biochemical", "cellular", "organism", or None
+    """
+    if not assay_info.get("bao_label"):
+        return None
+
+    fmt = assay_info["bao_label"].lower()
+
+    bao_to_context = {
         "cell-based format": "cellular",
         "organism-based format": "organism",
         "single protein format": "biochemical",
@@ -509,72 +550,185 @@ def assay_type_auxiliary(assay_info: dict[str, str]) -> Optional[str]:
         "subcellular format": "cellular",
         "assay format": None,
     }
-    content = BAO_TO_CONTEXT.get(fmt)
-    if not content and assay_info.get("assay_cell_type"):
+    context = bao_to_context.get(fmt)
+    if not context and assay_info.get("assay_cell_type"):
         return "cellular"
-    return BAO_TO_CONTEXT.get(fmt)
+
+    return context
 
 
-def certain_activity_mapper(all_assays_info: list[dict[str, str]]) -> dict[str, Optional[str]]:
-    assay_type = dict()
+def certain_activity_mapper(all_assays_info: list[dict]) -> dict:
+    """
+    Create mapping of assay IDs to their experimental contexts.
+    Args:
+        all_assays_info: List of assay information dictionaries
+    Returns:
+        Dictionary mapping assay_chembl_id to context type
+    """
+    logger.info("Mapping assay contexts")
+
+    assay_type = {}
     for assay_info in all_assays_info:
-        if assay_info.get("assay_chembl_id") and assay_info.get("assay_chembl_id") not in assay_type.keys():
-            assay_type[assay_info["assay_chembl_id"]] = assay_type_auxiliary(assay_info)
+        assay_id = assay_info.get("assay_chembl_id")
+        if assay_id and assay_id not in assay_type:
+            assay_type[assay_id] = assay_type_auxiliary(assay_info)
+
+    logger.debug(f"Mapped {len(assay_type)} assays to contexts")
     return assay_type
 
 
 def assay_exact_type_generator(activities: pd.DataFrame) -> pd.DataFrame:
-    df = activities.copy()
-    all_assays_info = assay_info_extractor(df)
-    ctx_map = certain_activity_mapper(all_assays_info)
-    df["context"] = df["assay_chembl_id"].map(ctx_map)
-    return df
+    """
+    Add 'context' column to activities based on exact assay metadata from ChEMBL where assay type can be directly taken
+    from metadata
+    Args:
+        activities: DataFrame with activities and assay_id
+    Returns:
+        DataFrame with added 'context' column
+    """
+    logger.info("Generating exact assay context types")
+    try:
+        df = activities.copy()
+        all_assays_info = assay_info_extractor(df)
+        ctx_map = certain_activity_mapper(all_assays_info)
+        df["context"] = df["assay_chembl_id"].map(ctx_map)
+        mapped_count = df["context"].notna().sum()
+        logger.info(f"Assigned exact context for {mapped_count}/{len(df)} activities exactly from metadata")
+
+        return df
+
+    except Exception as e:
+        logger.error(f"Error generating exact assay types: {e}")
+        raise
 
 
 def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFrame:
+    """
+    Infer missing assay contexts using heuristics based on standard_type and assay_type.
+    Heuristics:
+    - Ki, Kd → biochemical (not known for cellular or in vivo models)
+    - EC50 with functional assay (F) → cellular (used to describe the concentration of active compound to reach
+        50% of desirable biological effect, not known for in vivo and IC50 alternative used for biochemical assays)
+    - IC50 with binding assay (B) → biochemical (binding assay used for 2 molecules, so usually not known
+        for in vivo and cellular effect, IC50 alone very often used for both cellular and biochemical assays)
+    Args:
+        activities: DataFrame with 'context' (filled partially with assay_exact_type_generator),
+            'standard_type', and 'assay_type' columns
+    Returns:
+        DataFrame with filled 'context' column
+    """
+    logger.info("Inferring missing assay contexts using heuristics")
+
     df = activities.copy()
+    before_inference = df["context"].isna().sum()
+
     stype = df["standard_type"].astype(str).str.upper()
     atype = df["assay_type"].astype(str).str.upper()
     unknown = df["context"].isna()
+
     df.loc[unknown & stype.isin(["KI", "KD"]), "context"] = "biochemical"
     df.loc[unknown & (atype == "F") & (stype == "EC50"), "context"] = "cellular"
     df.loc[unknown & (atype == "B") & (stype == "IC50"), "context"] = "biochemical"
+    after_inference = df["context"].isna().sum()
+    delta = before_inference - after_inference
+    logger.info(f"Assigned exact context for {delta} activities approximately from metadata")
+
     return df
 
 
 def activity_status(activities: pd.DataFrame) -> pd.DataFrame:
-    THRESHOLD_ACTIVE = {
-        "biochemical": 6.0,  # <= 1 µM
-        "cellular": 5.0,  # <= 10 µM
-        "organism": 4.5,  # <= ~33 µM
-        "unknown": 6.0,  # same as the worst (<= 1 µM)
+    """
+    Classify activities as active/inactive based on pChEMBL value and assay context.
+
+    Activity thresholds by context:
+    - biochemical: pChEMBL >= 6.0 (≤ 1 µM)
+    - cellular: pChEMBL >= 5.0 (≤ 10 µM)
+    - organism: pChEMBL >= 4.5 (≤ ~33 µM)
+    - unknown: pChEMBL >= 6.0 (conservative)
+    Only considers exact relations (=, ~, <, <=) for reliable classification to filter not active until >
+        (which could be concentration or assay limit)
+    Args:
+        activities: DataFrame with activity data
+    Returns:
+        DataFrame with added 'is_active' boolean column used together with similarity to identify activity of
+            searched hit/lead
+    """
+
+    threshold_active = {
+        "biochemical": 6.0,
+        "cellular": 5.0,
+        "organism": 4.5,
+        "unknown": 6.0,
     }
-    ALLOWED_REL = {
-        "=", "~", None, "<", "<="
 
-    }
-    out = activities.copy()
-    out["pchembl_value"] = pd.to_numeric(out["pchembl_value"], errors="coerce")
-    ctx = out.get("context", pd.Series(index=out.index, dtype=object)).fillna("unknown").astype(str)
-    cutoff = ctx.map(THRESHOLD_ACTIVE).fillna(THRESHOLD_ACTIVE["unknown"])
-    rel_ok = out.get("relation", pd.Series(index=out.index, dtype=object)).isin(ALLOWED_REL)
-    out["is_active"] = (out["pchembl_value"] >= cutoff) & rel_ok
-    return out
+    allowed_rel = {"=", "~", None, "<", "<="}
+
+    try:
+        out = activities.copy()
+        out["pchembl_value"] = pd.to_numeric(out["pchembl_value"], errors="coerce")
+
+        ctx = out.get("context", pd.Series(index=out.index, dtype=object))
+        ctx = ctx.fillna("unknown").astype(str)
+
+        cutoff = ctx.map(threshold_active).fillna(threshold_active["unknown"])
+
+        rel_ok = out.get("relation", pd.Series(index=out.index, dtype=object)).isin(allowed_rel)
+
+        out["is_active"] = (out["pchembl_value"] >= cutoff) & rel_ok
+        active_count = out["is_active"].sum()
+        inactive_count = (~out["is_active"]).sum()
+        logger.info(f"Classification complete: {active_count} active, {inactive_count} inactive")
+        return out
+    except Exception as e:
+        logger.error(f"Error classifying activity status: {e}")
+        raise
 
 
-def main_generator(query: str) -> pd.DataFrame:
-    targets = find_targets(query)
-    print(targets)
-    combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist())
-    print(combined_activities[0:3])
-    activities = activities_to_dataframe(combined_activities)
-    print(activities.head())
+def main_activity_dataframe_generator(query: str,
+                                      organism: str = "Homo sapiens",
+                                      limit: Optional[int] = None,
+                                      stats: Optional[ConversionStatistics] = None
+                                      ) -> pd.DataFrame:
+    """
+    Main pipeline to generate complete molecular activity dataset for a target query.
+    Pipeline steps:
+    1. Find targets matching query
+    2. Retrieve all bioactivity data
+    3. Calculate pChEMBL values and fetch smiles
+    4. Determine assay contexts
+    5. Determine activity status (active/inactive/None)
+    Args:
+        query: Target search query (e.g., "CDK2", "kinase")
+        organism: Organism filter (default: "Homo sapiens")
+        limit: Maximum number of targets to process (default: None, search for all available targets)
+        stats: Optional statistics object to track fetching results
+    Returns:
+        DataFrame with columns: molecule_chembl_id, activity_id, assay_chembl_id,
+        pchembl_value, context, canonical_smiles, is_active
+    """
+    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{"=" * 60}\n\n")
+
+    logger.info(f"Step 1/6: Search for targets matching query\n")
+    targets = find_targets(query, organism=organism, limit=limit)
+
+    logger.info(f"Step 2/6: Retrieving combined activities\n")
+    combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
+
+    logger.info(f"Step 3/6: Creating Dataframe with activities")
+    activities = activities_to_dataframe(combined_activities, stats=stats)
+
+    logger.info(f"Step 4/6: Determining exact assay contexts")
     activities_with_exact_assays = assay_exact_type_generator(activities)
-    print(activities_with_exact_assays.head())
+
+    logger.info(f"Step 5/6: Determining remaining assay contexts")
     activities_with_all_assays = assay_approx_type_generator_for_row(activities_with_exact_assays)
-    print(activities_with_all_assays.head())
+
+    logger.info(f"Step 6/6: Classifying activity status")
     activities_all = activity_status(activities_with_all_assays)
-    print(activities_all.head())
-    return activities_all[
-        ["molecule_chembl_id", "activity_id", "assay_chembl_id", "pchembl_value", "context", "canonical_smiles",
-         "is_active"]]
+
+    final_df = activities_all[[
+        "molecule_chembl_id", "activity_id", "assay_chembl_id",
+        "pchembl_value", "context", "canonical_smiles", "is_active"
+    ]]
+
+    return final_df
