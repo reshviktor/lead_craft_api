@@ -35,3 +35,4 @@ def save_activities_to_db(df: pd.DataFrame, target: str):
         method='multi',
         chunksize=1000
     )
+

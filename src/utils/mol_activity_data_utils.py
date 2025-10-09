@@ -72,8 +72,6 @@ def setup_logging(
         "root": {"level": level.upper(), "handlers": ["console"]},
         "loggers": {
             "chembl_webresource_client": {"level": "ERROR"},
-            "urllib3": {"level": "WARNING"},
-            "requests": {"level": "WARNING"},
         } if mute_chembl else {}
     })
 
@@ -121,7 +119,9 @@ def find_targets(
                 if limit and len(rows) >= limit:
                     break
         logger.info(f"Found {len(rows)} targets matching criteria")
+
         return pd.DataFrame(rows)
+
     except Exception as e:
         logger.error(f"Error searching for targets: {e}")
         raise
@@ -157,6 +157,7 @@ def get_activities_for_target(
         activities = list(activities_found)
         if stats:
             stats.chembl_targets[target_chembl_id] = len(activities)
+
         return activities
 
     except Exception as e:
@@ -215,7 +216,7 @@ def combine_activities_for_targets(
     return all_activities
 
 
-def standard_unit_convertor_to_pchembl(
+def convert_standard_units_to_pchembl(
         units: str,
         value: float,
         stats: Optional[ConversionStatistics] = None
@@ -242,7 +243,7 @@ def standard_unit_convertor_to_pchembl(
     }
     if value < 0:
         if stats:
-           stats.pchembl_negative_values += 1
+            stats.pchembl_negative_values += 1
         return None
 
     if value == 0:
@@ -263,7 +264,7 @@ def standard_unit_convertor_to_pchembl(
         return None
 
 
-def pchembl_extractor(
+def retrieve_pchembl_value(
         activity_entry: dict,
         stats: Optional[ConversionStatistics] = None
 ) -> Optional[float]:
@@ -278,7 +279,7 @@ def pchembl_extractor(
         stats: Optional statistics object to track fetching results
 
     Returns:
-        pChEMBL value or None if cannot be determined
+        pChEMBL value or None if it cannot be determined
     """
 
     if activity_entry.get("pchembl_value"):
@@ -298,7 +299,7 @@ def pchembl_extractor(
         units = activity_entry.get("standard_units")
         if units:
             try:
-                pchembl_value_su = standard_unit_convertor_to_pchembl(
+                pchembl_value_su = convert_standard_units_to_pchembl(
                     units=units,
                     value=value,
                     stats=stats
@@ -316,7 +317,7 @@ def pchembl_extractor(
         units = activity_entry.get("units")
         if units:
             try:
-                pchembl_value_u = standard_unit_convertor_to_pchembl(
+                pchembl_value_u = convert_standard_units_to_pchembl(
                     units=units,
                     value=value,
                     stats=stats
@@ -386,7 +387,9 @@ def attach_smiles(
         raise
 
 
-def create_base_dataframe(activities: list[dict]) -> pd.DataFrame:
+def create_base_dataframe(
+        activities: list[dict]
+) -> pd.DataFrame:
     """
     Extract essential columns from activities list and create initial DataFrame.
 
@@ -400,6 +403,7 @@ def create_base_dataframe(activities: list[dict]) -> pd.DataFrame:
         "molecule_chembl_id", "activity_id", "assay_chembl_id",
         "assay_type", "standard_type", "relation"
     ]
+
     return pd.DataFrame(activities)[final_cols]
 
 
@@ -418,7 +422,7 @@ def add_pchembl_values(
         DataFrame with added 'pchembl_value' column
     """
     df = df.copy()
-    df["pchembl_value"] = [pchembl_extractor(act, stats=stats) for act in activities]
+    df["pchembl_value"] = [retrieve_pchembl_value(act, stats=stats) for act in activities]
 
     if stats:
         logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
@@ -439,7 +443,9 @@ def add_pchembl_values(
     return df
 
 
-def remove_duplicate_activities(df: pd.DataFrame) -> pd.DataFrame:
+def remove_duplicate_activities(
+        df: pd.DataFrame
+) -> pd.DataFrame:
     """
     Remove duplicate activities from DataFrame.
     Args:
@@ -459,7 +465,7 @@ def remove_duplicate_activities(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def activities_to_dataframe(
+def save_activities_in_dataframe(
         activities: list[dict[str, str]],
         stats: Optional[ConversionStatistics] = None,
 ) -> pd.DataFrame:
@@ -493,7 +499,7 @@ def activities_to_dataframe(
         raise
 
 
-def similarity_tanimoto_search(
+def calculate_tanimoto_similarity(
         mol_search: Chem.rdchem.Mol,
         smiles_from_df: str
 ) -> Optional[float]:
@@ -519,13 +525,15 @@ def similarity_tanimoto_search(
     except TypeError:
         return None
 
-    fingps_search_mol = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
-    fingps_for_df_mol = rdMolDescriptors.GetMACCSKeysFingerprint(molecule_from_df)
+    fingerprints_search_mol = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
+    fingerprints_for_df_mol = rdMolDescriptors.GetMACCSKeysFingerprint(molecule_from_df)
 
-    return DataStructs.TanimotoSimilarity(fingps_search_mol, fingps_for_df_mol)
+    return DataStructs.TanimotoSimilarity(fingerprints_search_mol, fingerprints_for_df_mol)
 
 
-def similarity_search_for_query(smiles: str) -> Callable[[str], Optional[float]]:
+def get_tanimoto_similarity_for_query(
+        smiles: str
+) -> Callable[[str], Optional[float]]:
     """An auxiliary function to use similarity_tanimoto_search with dataframe map.
     Args:
         smiles: Query SMILES string
@@ -536,10 +544,11 @@ def similarity_search_for_query(smiles: str) -> Callable[[str], Optional[float]]
     mol_search = Chem.MolFromSmiles(smiles)
     if not mol_search:
         raise ValueError("Invalid SMILES")
-    return lambda smi: similarity_tanimoto_search(mol_search, smi)
+
+    return lambda smi: calculate_tanimoto_similarity(mol_search, smi)
 
 
-def similarity_column_generation(
+def generate_similarity_column(
         df: pd.DataFrame,
         query_smiles: str,
         smiles_col: str = "canonical_smiles"
@@ -554,7 +563,7 @@ def similarity_column_generation(
         DataFrame copy with added 'tanimoto_similarity' column
     """
     logger.info(f"Generating similarity column for {query_smiles} smiles")
-    scorer = similarity_search_for_query(query_smiles)
+    scorer = get_tanimoto_similarity_for_query(query_smiles)
     df = df.copy()
     df["tanimoto_similarity"] = df[smiles_col].map(scorer)
     tanimoto_sim_total = df["tanimoto_similarity"].notna().sum()
@@ -562,10 +571,13 @@ def similarity_column_generation(
     logger.info(f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles")
     if smiles_total > tanimoto_sim_total:
         logger.warning(f"Not converted: {smiles_total - tanimoto_sim_total} smiles")
+
     return df
 
 
-def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict]:
+def retrieve_assay_info(
+        activities_df: pd.DataFrame
+) -> list[dict]:
     """
     Extract detailed assay information from ChEMBL for all unique assays.
     Args:
@@ -581,6 +593,7 @@ def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict]:
             .only(["assay_chembl_id", "assay_cell_type", "bao_label"])
         )
         logger.info(f"Retrieved information for {len(all_assays_info)} assays")
+
         return all_assays_info
 
     except Exception as e:
@@ -588,7 +601,9 @@ def assay_info_extractor(activities_df: pd.DataFrame) -> list[dict]:
         raise
 
 
-def assay_type_auxiliary(assay_info: dict) -> Optional[str]:
+def determine_assay_type_auxiliary(
+        assay_info: dict
+) -> Optional[str]:
     """
     Determine assay context (biochemical/cellular/organism) from BAO label and cell type.
     Args:
@@ -618,7 +633,9 @@ def assay_type_auxiliary(assay_info: dict) -> Optional[str]:
     return context
 
 
-def certain_activity_mapper(all_assays_info: list[dict]) -> dict:
+def create_certain_activity_mapper(
+        all_assays_info: list[dict]
+) -> dict:
     """
     Create mapping of assay IDs to their experimental contexts.
     Args:
@@ -632,13 +649,16 @@ def certain_activity_mapper(all_assays_info: list[dict]) -> dict:
     for assay_info in all_assays_info:
         assay_id = assay_info.get("assay_chembl_id")
         if assay_id and assay_id not in assay_type:
-            assay_type[assay_id] = assay_type_auxiliary(assay_info)
+            assay_type[assay_id] = determine_assay_type_auxiliary(assay_info)
 
     logger.debug(f"Mapped {len(assay_type)} assays to contexts")
+
     return assay_type
 
 
-def assay_exact_type_generator(activities: pd.DataFrame) -> pd.DataFrame:
+def generate_exact_assay_type(
+        activities: pd.DataFrame
+) -> pd.DataFrame:
     """
     Add 'context' column to activities based on exact assay metadata from ChEMBL where assay type can be directly taken
     from metadata
@@ -650,8 +670,8 @@ def assay_exact_type_generator(activities: pd.DataFrame) -> pd.DataFrame:
     logger.info("Generating exact assay context types")
     try:
         df = activities.copy()
-        all_assays_info = assay_info_extractor(df)
-        ctx_map = certain_activity_mapper(all_assays_info)
+        all_assays_info = retrieve_assay_info(df)
+        ctx_map = create_certain_activity_mapper(all_assays_info)
         df["context"] = df["assay_chembl_id"].map(ctx_map)
         mapped_count = df["context"].notna().sum()
         logger.info(f"Assigned exact context for {mapped_count}/{len(df)} activities exactly from metadata")
@@ -663,7 +683,9 @@ def assay_exact_type_generator(activities: pd.DataFrame) -> pd.DataFrame:
         raise
 
 
-def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFrame:
+def generate_approx_assay_type_for_row(
+        activities: pd.DataFrame
+) -> pd.DataFrame:
     """
     Infer missing assay contexts using heuristics based on standard_type and assay_type.
     Heuristics:
@@ -684,12 +706,12 @@ def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFram
     before_inference = df["context"].isna().sum()
 
     stype = df["standard_type"].astype(str).str.upper()
-    atype = df["assay_type"].astype(str).str.upper()
+    assay_type = df["assay_type"].astype(str).str.upper()
     unknown = df["context"].isna()
 
     df.loc[unknown & stype.isin(["KI", "KD"]), "context"] = "biochemical"
-    df.loc[unknown & (atype == "F") & (stype == "EC50"), "context"] = "cellular"
-    df.loc[unknown & (atype == "B") & (stype == "IC50"), "context"] = "biochemical"
+    df.loc[unknown & (assay_type == "F") & (stype == "EC50"), "context"] = "cellular"
+    df.loc[unknown & (assay_type == "B") & (stype == "IC50"), "context"] = "biochemical"
     after_inference = df["context"].isna().sum()
     delta = before_inference - after_inference
     logger.info(f"Assigned exact context for {delta} activities approximately from metadata")
@@ -697,7 +719,9 @@ def assay_approx_type_generator_for_row(activities: pd.DataFrame) -> pd.DataFram
     return df
 
 
-def activity_status(activities: pd.DataFrame) -> pd.DataFrame:
+def retrieve_activity_status(
+        activities: pd.DataFrame
+) -> pd.DataFrame:
     """
     Classify activities as active/inactive based on pChEMBL value and assay context.
 
@@ -739,17 +763,19 @@ def activity_status(activities: pd.DataFrame) -> pd.DataFrame:
         active_count = out["is_active"].sum()
         inactive_count = (~out["is_active"]).sum()
         logger.info(f"Classification complete: {active_count} active, {inactive_count} inactive")
+
         return out
+
     except Exception as e:
         logger.error(f"Error classifying activity status: {e}")
         raise
 
 
-def main_activity_dataframe_generator(query: str,
-                                      organism: str = "Homo sapiens",
-                                      limit: Optional[int] = None,
-                                      stats: Optional[ConversionStatistics] = None
-                                      ) -> pd.DataFrame:
+def generate_complete_activity_dataframe(query: str,
+                                         organism: str = "Homo sapiens",
+                                         limit: Optional[int] = None,
+                                         stats: Optional[ConversionStatistics] = None
+                                         ) -> pd.DataFrame:
     """
     Main pipeline to generate complete molecular activity dataset for a target query.
     Pipeline steps:
@@ -776,16 +802,16 @@ def main_activity_dataframe_generator(query: str,
     combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
 
     logger.info(f"Step 3/6: Creating Dataframe with activities")
-    activities = activities_to_dataframe(combined_activities, stats=stats)
+    activities = save_activities_in_dataframe(combined_activities, stats=stats)
 
     logger.info(f"Step 4/6: Determining exact assay contexts")
-    activities_with_exact_assays = assay_exact_type_generator(activities)
+    activities_with_exact_assays = generate_exact_assay_type(activities)
 
     logger.info(f"Step 5/6: Determining remaining assay contexts")
-    activities_with_all_assays = assay_approx_type_generator_for_row(activities_with_exact_assays)
+    activities_with_all_assays = generate_approx_assay_type_for_row(activities_with_exact_assays)
 
     logger.info(f"Step 6/6: Classifying activity status")
-    activities_all = activity_status(activities_with_all_assays)
+    activities_all = retrieve_activity_status(activities_with_all_assays)
 
     final_df = activities_all[[
         "molecule_chembl_id", "activity_id", "assay_chembl_id",
