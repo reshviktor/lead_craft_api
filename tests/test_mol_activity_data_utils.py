@@ -3,7 +3,7 @@ import pytest
 from collections import defaultdict
 from unittest.mock import patch, Mock
 from src.utils.mol_activity_data_utils import ConversionStatistics, find_targets, get_activities_for_target, \
-    combine_activities_for_targets, convert_standard_units_to_pchembl
+    combine_activities_for_targets, convert_standard_units_to_pchembl, retrieve_pchembl_value
 
 
 class TestConversionStatistics:
@@ -93,7 +93,7 @@ def sample_activities():
             'assay_chembl_id': 'CHEMBL3001',
             'assay_type': 'F',
             'molecule_chembl_id': 'CHEMBL68920',
-            'pchembl_value': '6.52',
+            'pchembl_value': None,
             'relation': '=',
             'standard_type': 'IC50',
             'standard_units': 'nM',
@@ -108,11 +108,11 @@ def sample_activities():
             'assay_chembl_id': 'CHEMBL3001',
             'assay_type': 'F',
             'molecule_chembl_id': 'CHEMBL68920',
-            'pchembl_value': '5.11',
+            'pchembl_value': None,
             'relation': '=',
-            'standard_type': 'IC50',
-            'standard_units': 'nM',
-            'standard_value': '7820.0',
+            'standard_type': None,
+            'standard_units': None,
+            'standard_value': None,
             'target_chembl_id': 'CHEMBL2000',
             'type': 'IC50',
             'units': 'uM',
@@ -130,14 +130,14 @@ def sample_activities_ex_2():
             'assay_chembl_id': 'CHEMBL3002',
             'assay_type': 'B',
             'molecule_chembl_id': 'CHEMBL69960',
-            'pchembl_value': '6.77',
+            'pchembl_value': None,
             'relation': '=',
-            'standard_type': 'IC50',
-            'standard_units': 'nM',
-            'standard_value': '170.0',
+            'standard_type': None,
+            'standard_units': None,
+            'standard_value': None,
             'target_chembl_id': ' CHEMBL2001',
             'type': 'IC50',
-            'units': 'uM',
+            'units': 'not_standard_unit',
             'value': '0.17'
         }]
 
@@ -318,6 +318,60 @@ class TestUnitConversion:
         result = convert_standard_units_to_pchembl("unknown_unit", 100, stats)
         assert result is None
         assert stats.unknown_units["unknown_unit"] == 1
+
+
+class TestRetrievePChEMBLValue:
+    """Tests for pChEMBL value extraction using sample_activities fixtures"""
+
+    def test_extract_direct_pchembl_value(self, sample_activities):
+        stats = ConversionStatistics()
+        """Test extraction from direct pchembl_value field (Activity 10001)"""
+        activity = sample_activities[0]
+        result = retrieve_pchembl_value(activity, stats)
+
+        assert result == 7.39
+        assert stats.no_activity == 0
+        assert len(stats.unknown_units) == 0
+
+    def test_calculate_from_standard_value(self, sample_activities):
+        stats = ConversionStatistics()
+        """Test calculation from standard_value/standard_units (Activity 10002)"""
+        activity = sample_activities[1]
+        result = retrieve_pchembl_value(activity, stats)
+        assert result is not None
+        assert result == pytest.approx(6.52, rel=0.01)
+        assert stats.no_activity == 0
+
+    def test_calculate_from_value_units_fallback(self, sample_activities):
+        """Test calculation from value/units as fallback (Activity 10003)"""
+        stats = ConversionStatistics()
+        activity = sample_activities[2]
+        result = retrieve_pchembl_value(activity, stats)
+        assert result is not None
+        assert result == pytest.approx(5.11, rel=0.01)
+        assert stats.no_activity == 0
+
+    def test_unknown_units_returns_none(self, sample_activities_ex_2):
+        """Test that unknown units return None and track in stats (Activity 10004)"""
+        stats = ConversionStatistics()
+        activity = sample_activities_ex_2[0]
+        result = retrieve_pchembl_value(activity, stats)
+        assert result is None
+        assert stats.unknown_units['not_standard_unit'] == 1
+        assert stats.no_activity == 1
+
+    def test_invalid_pchembl_value_string(self):
+        """Test handling of non-numeric pchembl_value"""
+        stats = ConversionStatistics()
+        activity = {
+            'activity_id': 99999,
+            'pchembl_value': 'invalid_string',
+            'standard_value': '100',
+            'standard_units': 'nM'
+        }
+        result = retrieve_pchembl_value(activity, stats)
+        assert result is not None
+        assert result == pytest.approx(7.0, rel=0.01)
 
 
 if __name__ == "__main__":

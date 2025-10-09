@@ -293,7 +293,7 @@ def retrieve_pchembl_value(
 
     try:
         value = float(activity_entry["standard_value"])
-    except (ValueError, KeyError):
+    except (TypeError, KeyError):
         pass
     else:
         units = activity_entry.get("standard_units")
@@ -307,11 +307,12 @@ def retrieve_pchembl_value(
             except (ValueError, KeyError) as e:
                 logger.debug(f"Could not convert value: {e}")
             else:
-                return pchembl_value_su
+                if pchembl_value_su is not None:
+                    return pchembl_value_su
 
     try:
         value = float(activity_entry["value"])
-    except (ValueError, KeyError):
+    except (TypeError, KeyError):
         pass
     else:
         units = activity_entry.get("units")
@@ -325,7 +326,9 @@ def retrieve_pchembl_value(
             except (ValueError, KeyError) as e:
                 logger.debug(f"Could not convert value: {e}")
             else:
-                return pchembl_value_u
+                if pchembl_value_u is not None:
+                    return pchembl_value_u
+
 
     logger.debug(f"Could not extract pchembl for activity {activity_entry.get('activity_id')}")
     if stats:
@@ -425,8 +428,8 @@ def add_pchembl_values(
     df["pchembl_value"] = [retrieve_pchembl_value(act, stats=stats) for act in activities]
 
     if stats:
-        logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
-        logger.warning(f"  Unknown units found: {len(stats.unknown_units)} types")
+        logger.warning(f"Negative values skipped: {stats.pchembl_negative_values}")
+        logger.warning(f"Unknown units found: {len(stats.unknown_units)} types")
         if len(stats.unknown_units.items()) >= 1:
             sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
             units_per_line = 5
