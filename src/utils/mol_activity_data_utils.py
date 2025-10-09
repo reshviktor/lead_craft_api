@@ -60,7 +60,7 @@ def setup_logging(
         level: Logging level for the application ("DEBUG", "INFO", "WARNING", "ERROR")
         mute_chembl: If True, suppress verbose output from ChEMBL and HTTP libraries
     """
-    logging.config.dictConfig({
+    dictConfig({
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
@@ -233,7 +233,7 @@ def standard_unit_convertor_to_pchembl(
     Raises:
         ValueError: If value is non-positive or unit is unknown
     """
-    unit_factors = {  # Unit conversion concentration to standart molar
+    unit_factors = {  # Unit conversion concentration to standard molar
         "m": 1.0,
         "mm": 1e-3,
         "um": 1e-6,
@@ -241,7 +241,11 @@ def standard_unit_convertor_to_pchembl(
         "pm": 1e-12,
     }
     if value < 0:
-        stats.pchembl_negative_values += 1
+        if stats:
+           stats.pchembl_negative_values += 1
+        return None
+
+    if value == 0:
         return None
 
     u = units.strip().lower()
@@ -254,7 +258,8 @@ def standard_unit_convertor_to_pchembl(
         pchembl = -math.log10(standard_value)
         return pchembl
     else:
-        stats.unknown_units[units] += 1
+        if stats:
+            stats.unknown_units[units] += 1
         return None
 
 
@@ -281,32 +286,39 @@ def pchembl_extractor(
             pchembl_value = float(activity_entry["pchembl_value"])
         except ValueError as e:
             logger.debug(
-                f"pchembl_value {activity_entry["pchembl_value"]} is not possible to convert to float: {e}")
+                f"pchembl_value {activity_entry['pchembl_value']} is not possible to convert to float: {e}")
         else:
             return pchembl_value
 
-    if (activity_entry.get("standard_value") and str(activity_entry["standard_value"]).
-            replace('.', '', 1).isdigit()):
+    try:
+        value = float(activity_entry["standard_value"])
+    except (ValueError, KeyError):
+        pass
+    else:
         units = activity_entry.get("standard_units")
         if units:
             try:
                 pchembl_value_su = standard_unit_convertor_to_pchembl(
                     units=units,
-                    value=float(activity_entry["standard_value"]),
+                    value=value,
                     stats=stats
                 )
             except (ValueError, KeyError) as e:
-                logger.debug(f"Could not convert standard_value: {e}")
+                logger.debug(f"Could not convert value: {e}")
             else:
                 return pchembl_value_su
 
-    if activity_entry.get("value") and str(activity_entry["value"]).replace('.', '', 1).isdigit():
+    try:
+        value = float(activity_entry["value"])
+    except (ValueError, KeyError):
+        pass
+    else:
         units = activity_entry.get("units")
         if units:
             try:
                 pchembl_value_u = standard_unit_convertor_to_pchembl(
                     units=units,
-                    value=float(activity_entry["value"]),
+                    value=value,
                     stats=stats
                 )
             except (ValueError, KeyError) as e:
@@ -374,18 +386,91 @@ def attach_smiles(
         raise
 
 
+def create_base_dataframe(activities: list[dict]) -> pd.DataFrame:
+    """
+    Extract essential columns from activities list and create initial DataFrame.
+
+    Args:
+        activities: List of activity dictionaries from ChEMBL
+
+    Returns:
+        DataFrame with essential activity columns
+    """
+    final_cols = [
+        "molecule_chembl_id", "activity_id", "assay_chembl_id",
+        "assay_type", "standard_type", "relation"
+    ]
+    return pd.DataFrame(activities)[final_cols]
+
+
+def add_pchembl_values(
+        df: pd.DataFrame,
+        activities: list[dict],
+        stats: Optional[ConversionStatistics] = None
+) -> pd.DataFrame:
+    """
+    Calculate and add pChEMBL values to DataFrame.
+    Args:
+        df: DataFrame with activity data
+        activities: Original list of activity dictionaries for pChEMBL extraction
+        stats: Optional statistics object to track conversion results
+    Returns:
+        DataFrame with added 'pchembl_value' column
+    """
+    df = df.copy()
+    df["pchembl_value"] = [pchembl_extractor(act, stats=stats) for act in activities]
+
+    if stats:
+        logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
+        logger.warning(f"  Unknown units found: {len(stats.unknown_units)} types")
+        if len(stats.unknown_units.items()) >= 1:
+            sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
+            units_per_line = 5
+            lines = ["Unknown units found:"]
+            for i in range(0, len(sorted_units), units_per_line):
+                batch = sorted_units[i:i + units_per_line]
+                line = ", ".join([f"{unit}: {count}" for unit, count in batch])
+                lines.append(f"  {line}")
+            logger.info("\n".join(lines))
+
+    valid_pchembl = df["pchembl_value"].notna().sum()
+    logger.info(f"Successfully calculated pChEMBL for {valid_pchembl}/{len(df)} activities")
+
+    return df
+
+
+def remove_duplicate_activities(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate activities from DataFrame.
+    Args:
+        df: DataFrame with activity data
+    Returns:
+        DataFrame without duplicates
+    TODO:
+        * it usually does nothing because work on every column, idea could be to remove duplicates
+            based on smiles (or molecular chembl id and context type later, leaving compound with the
+            best activity
+    """
+    before_dupl_rem = len(df)
+    df = df.drop_duplicates()
+    after_dupl_rem = len(df)
+    logger.info(f"Removed {before_dupl_rem - after_dupl_rem} duplicate activities")
+
+    return df
+
+
 def activities_to_dataframe(
         activities: list[dict[str, str]],
         stats: Optional[ConversionStatistics] = None,
 ) -> pd.DataFrame:
     """
     Convert list of activity dictionaries to DataFrame, cut off non-essential columns and
-     generate pChEMBL values.
+    generate pChEMBL values.
     Args:
-        activities: list of activity dictionaries from ChEMBL
+        activities: List of activity dictionaries from ChEMBL
         stats: Optional statistics object to track fetching results
     Returns:
-        DataFrame with activities (without duplicated) and calculated pChEMBL values
+        DataFrame with activities (without duplicates) and calculated pChEMBL values
     Raises:
         ValueError: If activities list is empty
     """
@@ -394,38 +479,14 @@ def activities_to_dataframe(
     if not activities:
         logger.error("Cannot create DataFrame from empty activities list")
         raise ValueError("No activities found")
+
     try:
-        activities_df = pd.DataFrame(activities, index=None)
-        final_cols = [
-            "molecule_chembl_id", "activity_id", "assay_chembl_id",
-            "assay_type", "standard_type", "relation"
-        ]
-        activities_df = activities_df[final_cols]
-        activities_df = attach_smiles(activities_df)
-        activities_df["pchembl_value"] = [pchembl_extractor(act, stats=stats) for act in activities]
+        df = create_base_dataframe(activities)
+        df = attach_smiles(df)
+        df = add_pchembl_values(df, activities, stats)
+        df = remove_duplicate_activities(df)
 
-        if stats:
-            logger.warning(f"  Negative values skipped: {stats.pchembl_negative_values}")
-            logger.warning(f"  Unknown units found: {len(stats.unknown_units)} types")
-            if len(stats.unknown_units.items()) >= 1:
-                sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
-                units_per_line = 5
-                lines = [f"Unknown units found:"]
-                for i in range(0, len(sorted_units), units_per_line):
-                    batch = sorted_units[i:i + units_per_line]
-                    line = ", ".join([f"{unit}: {count}" for unit, count in batch])
-                    lines.append(f"  {line}")
-                logger.info("\n".join(lines))
-
-        before_dupl_rem = len(activities_df)
-        activities_df = activities_df.drop_duplicates()
-        after_dupl_rem = len(activities_df)
-        logger.info(f"Removed {before_dupl_rem - after_dupl_rem} duplicate activities")
-
-        valid_pchembl = activities_df["pchembl_value"].notna().sum()
-        logger.info(f"Successfully calculated pChEMBL for {valid_pchembl}/{len(activities_df)} activities")
-
-        return activities_df
+        return df
 
     except Exception as e:
         logger.error(f"Error converting activities to DataFrame: {e}")
@@ -500,7 +561,7 @@ def similarity_column_generation(
     smiles_total = df[smiles_col].notna().sum()
     logger.info(f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles")
     if smiles_total > tanimoto_sim_total:
-        logger.warning("Not converted: {smiles_total - tanimoto_sim_total} smiles")
+        logger.warning(f"Not converted: {smiles_total - tanimoto_sim_total} smiles")
     return df
 
 
@@ -706,12 +767,12 @@ def main_activity_dataframe_generator(query: str,
         DataFrame with columns: molecule_chembl_id, activity_id, assay_chembl_id,
         pchembl_value, context, canonical_smiles, is_active
     """
-    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{"=" * 60}\n\n")
+    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{"=" * 60}\n")
 
-    logger.info(f"Step 1/6: Search for targets matching query\n")
+    logger.info(f"Step 1/6: Search for targets matching query")
     targets = find_targets(query, organism=organism, limit=limit)
 
-    logger.info(f"Step 2/6: Retrieving combined activities\n")
+    logger.info(f"Step 2/6: Retrieving combined activities")
     combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
 
     logger.info(f"Step 3/6: Creating Dataframe with activities")
