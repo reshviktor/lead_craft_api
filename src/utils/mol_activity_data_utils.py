@@ -6,6 +6,11 @@
     of those molecules, otherwise return "uncertain"
 Consider points 7, 8, 9 to be done not with pandas but with SQLAlchemy if FastAPI
 will be better for optimisation/next steps
+TODO write deduplication function that it will be remove 2 identical compounds if their context is same
+    and leave, and maybe leave results with higher concentration (logic if compound is selective toward
+    1 target (eg active against A2780 cancer cells but inactive toward healthy HDFA cell line only
+    high activity should be left
+TODO make some optimisation LRUcache
 ------------------------------------------
 1. Implement REST API logic <user gives target and smile -> check if a target
     already exists as SQL file -> start from SQL (point 7), if no -> start from scratch
@@ -35,11 +40,8 @@ This module provides utilities for fetching, processing, and analyzing molecular
 from ChEMBL database, including target search, activity retrieval, and bioactivity classification.
 """
 
-from typing import Optional, Callable
+from typing import Optional
 from chembl_webresource_client.new_client import new_client
-from rdkit import Chem
-from rdkit.Chem import DataStructs, rdMolDescriptors
-from logging.config import dictConfig
 import pandas as pd
 import re
 import math
@@ -48,32 +50,6 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
-
-
-def setup_logging(
-        level: str = "INFO",
-        mute_chembl: bool = True
-) -> None:
-    """
-    Configure logging for the application with suppression of noisy external libraries.
-    Args:
-        level: Logging level for the application ("DEBUG", "INFO", "WARNING", "ERROR")
-        mute_chembl: If True, suppress verbose output from ChEMBL and HTTP libraries
-    """
-    dictConfig({
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "std": {"format": "%(asctime)s - %(levelname)s - %(name)s - %(message)s"}
-        },
-        "handlers": {
-            "console": {"class": "logging.StreamHandler", "formatter": "std"}
-        },
-        "root": {"level": level.upper(), "handlers": ["console"]},
-        "loggers": {
-            "chembl_webresource_client": {"level": "ERROR"},
-        } if mute_chembl else {}
-    })
 
 
 @dataclass
@@ -162,8 +138,6 @@ def get_activities_for_target(
 
     except Exception as e:
         logger.error(f"Error fetching activities for {target_chembl_id}: {e}")
-        if stats:
-            stats.chembl_targets[target_chembl_id] = 0
         raise
 
 
@@ -329,7 +303,6 @@ def retrieve_pchembl_value(
                 if pchembl_value_u is not None:
                     return pchembl_value_u
 
-
     logger.debug(f"Could not extract pchembl for activity {activity_entry.get('activity_id')}")
     if stats:
         stats.no_activity += 1
@@ -349,6 +322,11 @@ def attach_smiles(
     Returns:
         DataFrame with added 'canonical_smiles' column
     """
+    if batch_size <= 0:
+        raise ValueError(f"batch_size {batch_size} cannot be less than 0")
+    if df.empty:
+        raise ValueError(f"Empty DataFrame received from ChEMBL")
+
     logger.info("Fetching SMILES strings for molecules")
 
     try:
@@ -356,7 +334,7 @@ def attach_smiles(
         molecule_ids = df["molecule_chembl_id"].dropna().unique().tolist()
         logger.info(f"Fetching SMILES for {len(molecule_ids)} unique molecules")
 
-        # batches are needed to speed up the process and make less api calls to chembl
+        # without batches there could be problems with to many api calls to chembl
         batches = [molecule_ids[i:i + batch_size] for i in range(0, len(molecule_ids), batch_size)]
         id_to_smiles = {}
 
@@ -365,14 +343,14 @@ def attach_smiles(
                 ["molecule_chembl_id", "molecule_structures"]
             )
             # mol_with_strs is a list of dicts of size batch_size or less for last batch
-            # dicts inside mol_with_strs in form
+            # dicts inside mol_with_strs in the following formate:
             # {'molecule_chembl_id': 'some_id',
             # 'molecule_structures': {'canonical_smiles': 'smiles string',
             # 'molfile': 'mol file adj. matrix',
             # 'standard_inchi': 'inchi string',
             # 'standard_inchi_key': 'inchi key'}}
             for mol in mol_with_strs:
-                smi = None  # if smiles is not found, it will be dropped later
+                smi = None
                 if mol.get("molecule_structures"):
                     smi = mol["molecule_structures"].get("canonical_smiles")
                 id_to_smiles[mol["molecule_chembl_id"]] = smi
@@ -424,6 +402,13 @@ def add_pchembl_values(
     Returns:
         DataFrame with added 'pchembl_value' column
     """
+    if df.empty:
+        raise ValueError("DataFrame with activities should not be empty")
+    if len(activities) != len(df):
+        raise ValueError(
+            f"Number of activities provided ({len(activities)}) does not match "
+            f"number of activities DataFrame ({len(df)})"
+        )
     df = df.copy()
     df["pchembl_value"] = [retrieve_pchembl_value(act, stats=stats) for act in activities]
 
@@ -493,89 +478,12 @@ def save_activities_in_dataframe(
         df = create_base_dataframe(activities)
         df = attach_smiles(df)
         df = add_pchembl_values(df, activities, stats)
-        df = remove_duplicate_activities(df)
 
         return df
 
     except Exception as e:
         logger.error(f"Error converting activities to DataFrame: {e}")
         raise
-
-
-def calculate_tanimoto_similarity(
-        mol_search: Chem.rdchem.Mol,
-        smiles_from_df: str
-) -> Optional[float]:
-    """
-    Calculate Tanimoto similarity between query molecule and target SMILES.
-    Uses MACCS keys fingerprints for similarity calculation.
-    Args:
-        mol_search: RDKit molecule object (query)/ mol is used not to convert many times same smiles to mol
-        smiles_from_df: SMILES string (target)/ smiles used not to generate column with data-heavy mol info
-    Returns:
-        Tanimoto similarity coefficient (0-1) or None if target is invalid
-    Raises:
-        ValueError: If search molecule is invalid
-    """
-    if not mol_search:
-        logger.error("Invalid search molecule provided")
-        raise ValueError("Invalid search SMILES")
-
-    try:
-        molecule_from_df = Chem.MolFromSmiles(smiles_from_df)
-        if not molecule_from_df:
-            return None
-    except TypeError:
-        return None
-
-    fingerprints_search_mol = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
-    fingerprints_for_df_mol = rdMolDescriptors.GetMACCSKeysFingerprint(molecule_from_df)
-
-    return DataStructs.TanimotoSimilarity(fingerprints_search_mol, fingerprints_for_df_mol)
-
-
-def get_tanimoto_similarity_for_query(
-        smiles: str
-) -> Callable[[str], Optional[float]]:
-    """An auxiliary function to use similarity_tanimoto_search with dataframe map.
-    Args:
-        smiles: Query SMILES string
-    Returns:
-        Callable that calculates similarity to the query molecule or returns None if smiles str in df is invalid.
-    Raises:
-        ValueError: If query SMILES is invalid"""
-    mol_search = Chem.MolFromSmiles(smiles)
-    if not mol_search:
-        raise ValueError("Invalid SMILES")
-
-    return lambda smi: calculate_tanimoto_similarity(mol_search, smi)
-
-
-def generate_similarity_column(
-        df: pd.DataFrame,
-        query_smiles: str,
-        smiles_col: str = "canonical_smiles"
-) -> pd.DataFrame:
-    """
-    Add tanimoto_similarity column to DataFrame based on query SMILES.
-    Args:
-        df: DataFrame with column containing activities of compounds and their SMILES string
-        query_smiles: Query molecule SMILES string
-        smiles_col: SMILES string column
-    Returns:
-        DataFrame copy with added 'tanimoto_similarity' column
-    """
-    logger.info(f"Generating similarity column for {query_smiles} smiles")
-    scorer = get_tanimoto_similarity_for_query(query_smiles)
-    df = df.copy()
-    df["tanimoto_similarity"] = df[smiles_col].map(scorer)
-    tanimoto_sim_total = df["tanimoto_similarity"].notna().sum()
-    smiles_total = df[smiles_col].notna().sum()
-    logger.info(f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles")
-    if smiles_total > tanimoto_sim_total:
-        logger.warning(f"Not converted: {smiles_total - tanimoto_sim_total} smiles")
-
-    return df
 
 
 def retrieve_assay_info(
@@ -588,6 +496,8 @@ def retrieve_assay_info(
     Returns:
         List of assay information dictionaries
     """
+    if activities_df.empty:
+        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
     assays = activities_df["assay_chembl_id"].dropna().unique().tolist()
     logger.info(f"Extracting assay information for {len(assays)} unique assays")
     try:
@@ -647,6 +557,8 @@ def create_certain_activity_mapper(
         Dictionary mapping assay_chembl_id to context type
     """
     logger.info("Mapping assay contexts")
+    if len(all_assays_info) == 0:
+        raise ValueError("No assay information provided")
 
     assay_type = {}
     for assay_info in all_assays_info:
@@ -670,6 +582,8 @@ def generate_exact_assay_type(
     Returns:
         DataFrame with added 'context' column
     """
+    if activities.empty:
+        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
     logger.info("Generating exact assay context types")
     try:
         df = activities.copy()
@@ -690,8 +604,8 @@ def generate_approx_assay_type_for_row(
         activities: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Infer missing assay contexts using heuristics based on standard_type and assay_type.
-    Heuristics:
+    Infer missing assay contexts using logical conclusions (approximations) based on standard_type and assay_type.
+    Approximations:
     - Ki, Kd → biochemical (not known for cellular or in vivo models)
     - EC50 with functional assay (F) → cellular (used to describe the concentration of active compound to reach
         50% of desirable biological effect, not known for in vivo and IC50 alternative used for biochemical assays)
@@ -703,7 +617,9 @@ def generate_approx_assay_type_for_row(
     Returns:
         DataFrame with filled 'context' column
     """
-    logger.info("Inferring missing assay contexts using heuristics")
+    if activities.empty:
+        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
+    logger.info("Inferring missing assay contexts using approximations")
 
     df = activities.copy()
     before_inference = df["context"].isna().sum()
@@ -800,9 +716,11 @@ def generate_complete_activity_dataframe(query: str,
 
     logger.info(f"Step 1/6: Search for targets matching query")
     targets = find_targets(query, organism=organism, limit=limit)
+    # TODO return some kind of answer that for query "query" no results + test if no results and no problem
 
     logger.info(f"Step 2/6: Retrieving combined activities")
     combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
+    # TODO return some kind of answer that for query "query" there are some targets but no activity found
 
     logger.info(f"Step 3/6: Creating Dataframe with activities")
     activities = save_activities_in_dataframe(combined_activities, stats=stats)
@@ -812,6 +730,7 @@ def generate_complete_activity_dataframe(query: str,
 
     logger.info(f"Step 5/6: Determining remaining assay contexts")
     activities_with_all_assays = generate_approx_assay_type_for_row(activities_with_exact_assays)
+    # TODO write and implement deduplication on this step + tests for this case + tests for deduplication
 
     logger.info(f"Step 6/6: Classifying activity status")
     activities_all = retrieve_activity_status(activities_with_all_assays)
