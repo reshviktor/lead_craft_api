@@ -1,38 +1,3 @@
-"""The workflow process so far:
-8. Add a "similarity" column and fill it using search_smiles from the user query
-    and dataframe from SQL similarity_column_generation
-9. Filter the dataframe by the "similarity" column and give if there are >= 5
-    molecules with similarity >= 0.7 return similarity based on the activity
-    of those molecules, otherwise return "uncertain"
-Consider points 7, 8, 9 to be done not with pandas but with SQLAlchemy if FastAPI
-will be better for optimisation/next steps
-TODO write deduplication function that it will be remove 2 identical compounds if their context is same
-    and leave, and maybe leave results with higher concentration (logic if compound is selective toward
-    1 target (eg active against A2780 cancer cells but inactive toward healthy HDFA cell line only
-    high activity should be left
-TODO make some optimisation LRUcache
-------------------------------------------
-1. Implement REST API logic <user gives target and smile -> check if a target
-    already exists as SQL file -> start from SQL (point 7), if no -> start from scratch
-    (point 1)
-2. Consider the 10 closest related targets to score with automatic docking (Autodock Vina
-    (or other options), and work with the docking score as follows:
-    if the docking score is similar or better than for active, closely related compounds
-    (or worse/similar to inactive closely related compounds)
-    return active/inactive/unknown status, scores, docking files, and images
-    (if possible).
-3. Make proposals for lead compound optimisation.
-
-IMPORTANT todos list:
-TODO add tests
-TODO add docker
-TODO add ci/cd
-TODO add readme
-TODO add example jupiter notebook
-
-TODO check if all return targets are relevant to the query
-"""
-
 """
 Molecular Activity Data Utilities
 
@@ -64,36 +29,30 @@ class ConversionStatistics:
 
 def find_targets(
         query: str,
-        organism: str = "Homo sapiens",
-        limit: Optional[int] = None
+        organism: Optional[str] = "Homo sapiens",
 ) -> pd.DataFrame:
     """
     Search for biological targets in ChEMBL database matching the query.
     # see more here: https://github.com/chembl/chembl_webresource_client
-
     Args:
         query: Search term, e.g. receptor or enzyme
-        organism: Organism filter (default: "Homo sapiens")
-        limit: Maximum number of results to return
-
+        organism: Organism filter (default: "Homo sapiens", if None will search all organisms)
     Returns:
         DataFrame with columns: target_chembl_id, pref_name, organism, target_type
     """
-    logger.info(f"Searching for targets with query: '{query}', organism: '{organism}', limit: {limit}")
+    logger.info(f"Searching for targets with query: '{query}', organism: '{organism}")
     try:
         t = new_client.target
         hits = t.search(query)
         rows = []
         for hit in hits:
-            if organism and hit.get("organism") == organism:
+            if organism is None or hit.get("organism") == organism:
                 rows.append({
                     "target_chembl_id": hit["target_chembl_id"],
                     "pref_name": hit.get("pref_name"),
                     "organism": hit.get("organism"),
                     "target_type": hit.get("target_type"),
                 })
-                if limit and len(rows) >= limit:
-                    break
         logger.info(f"Found {len(rows)} targets matching criteria")
 
         return pd.DataFrame(rows)
@@ -110,12 +69,10 @@ def get_activities_for_target(
 ) -> list[Optional[dict[str, str]]]:
     """
     Retrieve bioactivity data for a specific target from ChEMBL.
-
     Args:
         target_chembl_id: ChEMBL target identifier
         types: Tuple of activity types to retrieve (default: IC50, Ki, Kd, EC50)
         stats: Optional statistics object to track fetching results
-
     Returns:
         List of activity dictionaries containing assay and measurement data
     """
@@ -382,7 +339,7 @@ def create_base_dataframe(
     """
     final_cols = [
         "molecule_chembl_id", "activity_id", "assay_chembl_id",
-        "assay_type", "standard_type", "relation"
+        "assay_type", "standard_type", "relation", "target_chembl_id"
     ]
 
     return pd.DataFrame(activities)[final_cols]
@@ -427,29 +384,7 @@ def add_pchembl_values(
 
     valid_pchembl = df["pchembl_value"].notna().sum()
     logger.info(f"Successfully calculated pChEMBL for {valid_pchembl}/{len(df)} activities")
-
-    return df
-
-
-def remove_duplicate_activities(
-        df: pd.DataFrame
-) -> pd.DataFrame:
-    """
-    Remove duplicate activities from DataFrame.
-    Args:
-        df: DataFrame with activity data
-    Returns:
-        DataFrame without duplicates
-    TODO:
-        * it usually does nothing because work on every column, idea could be to remove duplicates
-            based on smiles (or molecular chembl id and context type later, leaving compound with the
-            best activity
-    """
-    before_dupl_rem = len(df)
-    df = df.drop_duplicates()
-    after_dupl_rem = len(df)
-    logger.info(f"Removed {before_dupl_rem - after_dupl_rem} duplicate activities")
-
+    df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
     return df
 
 
@@ -690,54 +625,139 @@ def retrieve_activity_status(
         raise
 
 
-def generate_complete_activity_dataframe(query: str,
-                                         organism: str = "Homo sapiens",
-                                         limit: Optional[int] = None,
-                                         stats: Optional[ConversionStatistics] = None
-                                         ) -> pd.DataFrame:
+def remove_duplicate_activities(
+        df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Remove duplicate activities based on molecule, target, and context combination.
+    For same molecule + target + context, keep entry with highest pChEMBL value.
+    If all pChEMBL values are None, keeps the first occurrence.
+
+    Args:
+        df: DataFrame with activity data including 'molecule_chembl_id',
+            'target_chembl_id', 'context', and 'pchembl_value' columns
+
+    Returns:
+        DataFrame without duplicates, keeping best activities
+    """
+    if df.empty:
+        raise ValueError("Activities dataframe should not be empty")
+
+    df = df.copy()
+    before_dupl_rem = len(df)
+    df = df.drop_duplicates()
+    after_exact_dupl_rem = len(df)
+    exact_removed = before_dupl_rem - after_exact_dupl_rem
+    dedup_cols = ["molecule_chembl_id", "target_chembl_id", "context"]
+    for col in dedup_cols:
+        if col not in df.columns:
+            raise ValueError(f"Column {col} not in dataframe columns during deduplication process")
+    df["_temp_context"] = df["context"].fillna("<none>")
+    df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
+    sort_cols = ["molecule_chembl_id", "target_chembl_id", "_temp_context", "pchembl_value"]
+    sort_order = [True, True, True, False]
+
+    if "activity_id" in df.columns:
+        sort_cols.append("activity_id")
+        sort_order.append(True)
+
+    df_sorted = df.sort_values(
+        by=sort_cols,
+        ascending=sort_order,
+        na_position='last'
+    )
+    df_dedup = (
+        df_sorted
+        .drop_duplicates(subset=["molecule_chembl_id", "target_chembl_id", "_temp_context"], keep='first')
+        .drop(columns=["_temp_context"])
+        .reset_index(drop=True)
+    )
+    after_advanced_dupl_rem = len(df_dedup)
+    advanced_removed = after_exact_dupl_rem - after_advanced_dupl_rem
+    total_removed = before_dupl_rem - after_advanced_dupl_rem
+    none_pchembl_count = df_dedup["pchembl_value"].isna().sum()
+    if none_pchembl_count > 0:
+        logger.warning(
+            f"{none_pchembl_count}/{len(df_dedup)} activities have no pChEMBL value after deduplication"
+        )
+    logger.info(
+        f"Removed {total_removed} duplicate activities: "
+        f"{exact_removed} exact duplicates, "
+        f"{advanced_removed} by keeping highest pChEMBL values"
+    )
+
+    return df_dedup
+
+
+def generate_complete_activity_dataframe(
+        query: str,
+        organism: Optional[str] = "Homo sapiens",
+        stats: Optional[ConversionStatistics] = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main pipeline to generate complete molecular activity dataset for a target query.
+
     Pipeline steps:
     1. Find targets matching query
     2. Retrieve all bioactivity data
     3. Calculate pChEMBL values and fetch smiles
     4. Determine assay contexts
-    5. Determine activity status (active/inactive/None)
+    5. Classify activity status (active/inactive)
+    6. Remove duplicate activities
+
     Args:
         query: Target search query (e.g., "CDK2", "kinase")
-        organism: Organism filter (default: "Homo sapiens")
-        limit: Maximum number of targets to process (default: None, search for all available targets)
+        organism: Organism filter (default: "Homo sapiens"). None for all organisms.
         stats: Optional statistics object to track fetching results
+
     Returns:
-        DataFrame with columns: molecule_chembl_id, activity_id, assay_chembl_id,
-        pchembl_value, context, canonical_smiles, is_active
+        Tuple of (activities_dataframe, targets_dataframe) where:
+        - activities_dataframe: Activity data with columns: molecule_chembl_id,
+          activity_id, target_chembl_id, assay_chembl_id, pchembl_value, context,
+          canonical_smiles, is_active
+        - targets_dataframe: Unique target metadata with columns: target_chembl_id,
+          pref_name, organism, target_type
+
+    Raises:
+        ValueError: If no targets or no activities found for the query
     """
-    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{"=" * 60}\n")
+    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{'=' * 60}\n")
 
-    logger.info(f"Step 1/6: Search for targets matching query")
-    targets = find_targets(query, organism=organism, limit=limit)
-    # TODO return some kind of answer that for query "query" no results + test if no results and no problem
+    logger.info(f"Step 1/7: Search for targets matching query")
+    targets = find_targets(query, organism=organism)
+    if targets.empty:
+        logger.error(f"No targets found for query: '{query}'")
+        raise ValueError(f"No targets found for query: '{query}'")
 
-    logger.info(f"Step 2/6: Retrieving combined activities")
+    logger.info(f"Step 2/7: Retrieving combined activities")
     combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
-    # TODO return some kind of answer that for query "query" there are some targets but no activity found
+    if len(combined_activities) == 0:
+        logger.error(f"No activities found for query: '{query}'")
+        raise ValueError(f"No activities found for any targets matching query: '{query}'")
 
-    logger.info(f"Step 3/6: Creating Dataframe with activities")
+    logger.info(f"Step 3/7: Creating Dataframe with activities")
     activities = save_activities_in_dataframe(combined_activities, stats=stats)
 
-    logger.info(f"Step 4/6: Determining exact assay contexts")
+    logger.info(f"Step 4/7: Determining exact assay contexts")
     activities_with_exact_assays = generate_exact_assay_type(activities)
 
-    logger.info(f"Step 5/6: Determining remaining assay contexts")
+    logger.info(f"Step 5/7: Determining remaining assay contexts")
     activities_with_all_assays = generate_approx_assay_type_for_row(activities_with_exact_assays)
-    # TODO write and implement deduplication on this step + tests for this case + tests for deduplication
 
-    logger.info(f"Step 6/6: Classifying activity status")
+    logger.info(f"Step 6/7: Classifying activity status")
     activities_all = retrieve_activity_status(activities_with_all_assays)
 
-    final_df = activities_all[[
-        "molecule_chembl_id", "activity_id", "assay_chembl_id",
-        "pchembl_value", "context", "canonical_smiles", "is_active"
+    logger.info(f"Step 7/7: Removing duplicate activities")
+    unique_activities = remove_duplicate_activities(activities_all)
+
+    final_df = unique_activities[[
+        "molecule_chembl_id", "activity_id", "target_chembl_id", "assay_chembl_id",
+        "pchembl_value", "context", "canonical_smiles", "is_active",
     ]]
 
-    return final_df
+    used_target_ids = final_df["target_chembl_id"].unique()
+    targets_filtered = targets[targets["target_chembl_id"].isin(used_target_ids)].drop_duplicates()
+
+    logger.info(f"Pipeline complete: {len(final_df)} activities from {len(targets_filtered)} targets")
+
+    return final_df, targets_filtered

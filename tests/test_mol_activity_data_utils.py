@@ -6,7 +6,8 @@ from src.utils.mol_activity_data_utils import ConversionStatistics, find_targets
     combine_activities_for_targets, convert_standard_units_to_pchembl, retrieve_pchembl_value, create_base_dataframe, \
     retrieve_assay_info, determine_assay_type_auxiliary, retrieve_activity_status, attach_smiles, \
     generate_complete_activity_dataframe, add_pchembl_values, save_activities_in_dataframe, \
-    create_certain_activity_mapper, generate_exact_assay_type, generate_approx_assay_type_for_row
+    create_certain_activity_mapper, generate_exact_assay_type, generate_approx_assay_type_for_row, \
+    remove_duplicate_activities
 
 
 class TestConversionStatistics:
@@ -200,32 +201,12 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
     """Tests for functions that make ChEMBL API calls (with mocking)"""
 
     @patch('src.utils.mol_activity_data_utils.new_client')
-    def test_find_targets_with_limit(self, mock_client, sample_targets):
-        """Test target search with mocked API"""
-        mock_target = Mock()
-        mock_target.search.return_value = sample_targets
-        mock_client.target = mock_target
-        result = find_targets("EGFR", organism="Homo sapiens", limit=2)
-
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 2
-        assert "target_chembl_id" in result.columns
-        assert "pref_name" in result.columns
-        assert "organism" in result.columns
-        assert "target_type" in result.columns
-        assert all(result["organism"] == "Homo sapiens")
-        assert result.iloc[0]["target_chembl_id"] == "CHEMBL100"
-        assert result.iloc[1]["target_chembl_id"] == "CHEMBL200"
-
-        mock_target.search.assert_called_once_with("EGFR")
-
-    @patch('src.utils.mol_activity_data_utils.new_client')
-    def test_find_targets_no_limit(self, mock_client, sample_targets):
+    def test_find_targets(self, mock_client, sample_targets):
         """Test target search without limit returns all matching targets (3 targets returned and 1 excluded)"""
         mock_target = Mock()
         mock_target.search.return_value = sample_targets
         mock_client.target = mock_target
-        result = find_targets("EGFR", organism="Homo sapiens", limit=None)
+        result = find_targets("EGFR", organism="Homo sapiens")
 
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 3
@@ -507,7 +488,7 @@ def test_create_base_dataframe(sample_activities):
     df = create_base_dataframe(sample_activities)
     expected_cols = [
         "molecule_chembl_id", "activity_id", "assay_chembl_id",
-        "assay_type", "standard_type", "relation"
+        "assay_type", "standard_type", "relation", "target_chembl_id"
     ]
     assert list(df.columns) == expected_cols
     assert len(df) == 3
@@ -528,6 +509,8 @@ class TestAddPchEMBL:
         assert stats.unknown_units['not_standard_unit'] == 1
         assert result['pchembl_value'].notna().sum() == 3
         assert result.loc[3, 'pchembl_value'] is None or pd.isna(result.loc[3, 'pchembl_value'])
+        assert pd.api.types.is_numeric_dtype(result['pchembl_value'])
+        assert isinstance(result.loc[0, 'pchembl_value'], (float, int)) or pd.isna(result.loc[0, 'pchembl_value'])
 
     def test_add_pchembl_values_without_stats(self, sample_activities):
         """Test that function works without stats parameter"""
@@ -539,6 +522,7 @@ class TestAddPchEMBL:
 
         assert 'pchembl_value' in result.columns
         assert result['pchembl_value'].notna().sum() == 3
+        assert pd.api.types.is_numeric_dtype(result['pchembl_value'])
 
     def test_add_pchembl_values_preserves_other_columns(self, sample_activities):
         """Test that other DataFrame columns are preserved"""
@@ -555,9 +539,10 @@ class TestAddPchEMBL:
         assert 'molecule_chembl_id' in result.columns
         assert 'assay_chembl_id' in result.columns
         assert 'standard_type' in result.columns
-
         assert list(result['activity_id']) == [10001, 10002, 10003]
         assert list(result['assay_chembl_id']) == ['ASSAY1', 'ASSAY2', 'ASSAY3']
+        assert pd.api.types.is_numeric_dtype(result['pchembl_value'])
+        assert result.loc[0, 'pchembl_value'] == pytest.approx(7.39, rel=0.01)
 
     def test_add_pchembl_values_empty_activities(self):
         """Test handling of empty activities list"""
@@ -719,7 +704,6 @@ class TestCreateCertainActivityMapper:
         assert result['CHEMBL001'] == 'biochemical'
 
 
-# TODO write test on generate_exact_assay_type
 class TestGenerateExactAssayType:
     """Tests for adding context column based on exact assay metadata"""
 
@@ -785,9 +769,6 @@ class TestGenerateExactAssayType:
         assert result.loc[3, 'context'] == 'biochemical'
         assert result['context'].notna().sum() == 2
 
-
-
-# TODO write test on generate_approx_assay_type_for_row
 
 class TestGenerateApproxAssayType:
     """Tests for inferring missing assay contexts using heuristics"""
@@ -882,6 +863,63 @@ class TestActivityClassification:
         assert result.loc[2, "is_active"] == True
 
 
+class TestRemoveDuplicateActivities:
+    def test_empty_dataframe_raises_error(self):
+        """Test that empty DataFrame raises ValueError"""
+        df = pd.DataFrame()
+        with pytest.raises(ValueError, match="Activities dataframe should not be empty"):
+            remove_duplicate_activities(df)
+
+    def test_missing_columns_raises_error(self):
+        """Test that missing required columns raises ValueError"""
+        df = pd.DataFrame({
+            'molecule_chembl_id': ['CHEMBL1'],
+            'target_chembl_id': ['TARGET1']
+        })
+        with pytest.raises(ValueError, match="Column context not in dataframe columns during deduplication process"):
+            remove_duplicate_activities(df)
+
+    def test_keeps_highest_pchembl_value(self):
+        """Test that for duplicate entries, highest pChEMBL value is kept"""
+        df = pd.DataFrame({
+            'molecule_chembl_id': ['CHEMBL1', 'CHEMBL1', 'CHEMBL2', 'CHEMBL2'],
+            'target_chembl_id': ['TARGET1', 'TARGET1', 'TARGET2', 'TARGET2'],
+            'context': ['biochemical', 'biochemical', 'cellular', 'cellular'],
+            'pchembl_value': [6.5, 7.2, 5.0, 4.5],
+            'activity_id': [1, 2, 3, 4]
+        })
+
+        result = remove_duplicate_activities(df)
+
+        assert len(result) == 2
+        chembl1_row = result[result['molecule_chembl_id'] == 'CHEMBL1'].iloc[0]
+        assert chembl1_row['pchembl_value'] == 7.2
+        assert chembl1_row['activity_id'] == 2
+        chembl2_row = result[result['molecule_chembl_id'] == 'CHEMBL2'].iloc[0]
+        assert chembl2_row['pchembl_value'] == 5.0
+        assert chembl2_row['activity_id'] == 3
+
+    def test_handles_nan_contexts(self):
+        """Test that NaN contexts are properly grouped and deduplicated"""
+        df = pd.DataFrame({
+            'molecule_chembl_id': ['CHEMBL1', 'CHEMBL1', 'CHEMBL1'],
+            'target_chembl_id': ['TARGET1', 'TARGET1', 'TARGET1'],
+            'context': [None, None, 'biochemical'],
+            'pchembl_value': [6.0, 7.0, 5.5],
+            'activity_id': [1, 2, 3]
+        })
+
+        result = remove_duplicate_activities(df)
+        assert len(result) == 2
+        nan_rows = result[result['context'].isna()]
+        assert len(nan_rows) == 1
+        assert nan_rows.iloc[0]['pchembl_value'] == 7.0
+        assert nan_rows.iloc[0]['activity_id'] == 2
+        bio_rows = result[result['context'] == 'biochemical']
+        assert len(bio_rows) == 1
+        assert bio_rows.iloc[0]['pchembl_value'] == 5.5
+
+
 class TestIntegration:
     """Integration tests for complete workflows"""
 
@@ -917,21 +955,55 @@ class TestIntegration:
         mock_client.molecule = mock_molecule
         mock_client.assay = mock_assay
 
-        result = generate_complete_activity_dataframe("CDK2")
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 3
+        activities_df, targets_df = generate_complete_activity_dataframe("CDK2")
+
+        assert isinstance(activities_df, pd.DataFrame)
+        assert len(activities_df) == 3
         expected_columns = [
             "molecule_chembl_id", "activity_id", "assay_chembl_id",
-            "pchembl_value", "context", "canonical_smiles", "is_active"
+            "pchembl_value", "context", "canonical_smiles", "is_active", "target_chembl_id"
         ]
-        assert all(col in result.columns for col in expected_columns)
-        assert result["canonical_smiles"].notna().any()
-        assert "O=C(O)c1ccc(O)cc1" in result["canonical_smiles"].values
-        assert "O=C(O)/C=C/c1ccc(O)c(O)c1" in result["canonical_smiles"].values
-        assert "O=[N+]([O-])c1ccc(O)c(O)c1" in result["canonical_smiles"].values
-        assert "CHEMBL7000" in result["molecule_chembl_id"].values
-        assert "CHEMBL7001" in result["molecule_chembl_id"].values
-        assert "CHEMBL7002" in result["molecule_chembl_id"].values
+        assert len(activities_df.columns) == 8
+        assert all(col in activities_df.columns for col in expected_columns)
+        assert activities_df["canonical_smiles"].notna().any()
+        assert "O=C(O)c1ccc(O)cc1" in activities_df["canonical_smiles"].values
+        assert "O=C(O)/C=C/c1ccc(O)c(O)c1" in activities_df["canonical_smiles"].values
+        assert "O=[N+]([O-])c1ccc(O)c(O)c1" in activities_df["canonical_smiles"].values
+        assert "CHEMBL7000" in activities_df["molecule_chembl_id"].values
+        assert "CHEMBL7001" in activities_df["molecule_chembl_id"].values
+        assert "CHEMBL7002" in activities_df["molecule_chembl_id"].values
+        assert isinstance(targets_df, pd.DataFrame)
+        assert "target_chembl_id" in targets_df.columns
+        assert "pref_name" in targets_df.columns
+        assert "organism" in targets_df.columns
+        assert "target_type" in targets_df.columns
+
+    @patch("src.utils.mol_activity_data_utils.new_client")
+    def test_complete_pipeline_no_targets_found(self, mock_client):
+        """Test pipeline raises ValueError when no targets found"""
+        mock_target = Mock()
+        mock_target.search.return_value = []
+        mock_client.target = mock_target
+
+        with pytest.raises(ValueError, match="No targets found for query: 'NONEXISTENT'"):
+            generate_complete_activity_dataframe("NONEXISTENT")
+
+    @patch("src.utils.mol_activity_data_utils.new_client")
+    def test_complete_pipeline_no_activities_found(self, mock_client, sample_targets):
+        """Test pipeline raises ValueError when targets exist but no activities found"""
+        mock_target = Mock()
+        mock_target.search.return_value = sample_targets
+
+        mock_activity = Mock()
+        mock_filter = Mock()
+        mock_filter.only.return_value = []
+        mock_activity.filter.return_value = mock_filter
+
+        mock_client.target = mock_target
+        mock_client.activity = mock_activity
+
+        with pytest.raises(ValueError, match="No activities found"):
+            generate_complete_activity_dataframe("CDK2")
 
 
 if __name__ == "__main__":
