@@ -850,7 +850,7 @@ class TestActivityClassification:
         assert result.loc[2, "is_active"] == True
 
     def test_activity_status_relation_filter(self):
-        """Test that only certain relations are considered active"""
+        """Test that invalid relations in active region return None"""
         df = pd.DataFrame({
             "pchembl_value": [7.0, 7.0, 7.0],
             "context": ["biochemical", "biochemical", "biochemical"],
@@ -858,9 +858,61 @@ class TestActivityClassification:
         })
         result = retrieve_activity_status(df)
 
+        assert result.loc[0, "is_active"] == True  # Valid relation in active region
+        assert result.loc[1, "is_active"] is None  # Invalid relation in active region
+        assert result.loc[2, "is_active"] == True  # Valid relation in active region
+
+    def test_activity_status_invalid_relation_in_inactive_region(self):
+        """Test that invalid relation in inactive region still returns False"""
+        df = pd.DataFrame({
+            "pchembl_value": [4.0, 5.0, 3.5],
+            "context": ["biochemical", "biochemical", "biochemical"],
+            "relation": [">", ">", ">="]
+        })
+        result = retrieve_activity_status(df)
+
+        assert result.loc[0, "is_active"] == False
+        assert result.loc[1, "is_active"] == False
+        assert result.loc[2, "is_active"] == False
+
+    def test_activity_status_missing_pchembl_values(self):
+        """Test that missing pChEMBL values return None"""
+        df = pd.DataFrame({
+            "pchembl_value": [None, 7.0, None],
+            "context": ["biochemical", "biochemical", "cellular"],
+            "relation": ["=", "=", "~"]
+        })
+        result = retrieve_activity_status(df)
+
+        assert result.loc[0, "is_active"] is None
+        assert result.loc[1, "is_active"] == True
+        assert result.loc[2, "is_active"] is None
+
+    def test_activity_status_edge_cases_mixed(self):
+        """Test mixed edge cases with different contexts and relations"""
+        df = pd.DataFrame({
+            "pchembl_value": [6.0, 5.99, 6.0, None, 4.0],
+            "context": ["biochemical", "biochemical", "biochemical", "biochemical", "biochemical"],
+            "relation": ["=", "=", ">", "=", ">"]
+        })
+        result = retrieve_activity_status(df)
+
         assert result.loc[0, "is_active"] == True
         assert result.loc[1, "is_active"] == False
-        assert result.loc[2, "is_active"] == True
+        assert result.loc[2, "is_active"] is None
+        assert result.loc[3, "is_active"] is None
+        assert result.loc[4, "is_active"] == False
+
+    def test_activity_status_empty_dataframe_raises_error(self):
+        """Test that empty DataFrame raises ValueError"""
+        df = pd.DataFrame({
+            "pchembl_value": [],
+            "context": [],
+            "relation": []
+        })
+
+        with pytest.raises(ValueError, match="Cannot classify activity status on empty DataFrame"):
+            retrieve_activity_status(df)
 
 
 class TestRemoveDuplicateActivities:

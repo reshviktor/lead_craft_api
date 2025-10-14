@@ -584,14 +584,24 @@ def retrieve_activity_status(
     - cellular: pChEMBL >= 5.0 (≤ 10 µM)
     - organism: pChEMBL >= 4.5 (≤ ~33 µM)
     - unknown: pChEMBL >= 6.0 (conservative)
-    Only considers exact relations (=, ~, <, <=) for reliable classification to filter not active until >
-        (which could be concentration or assay limit)
+
+    Only considers exact relations (=, ~, <, <=) for reliable classification.
+    Relations like '>' are excluded as they indicate assay limits, not true activity.
+
+    Classification logic:
+    - Missing pChEMBL → None (unknown)
+    - pChEMBL < threshold → False (inactive, regardless of relation)
+    - pChEMBL >= threshold + valid relation → True (active)
+    - pChEMBL >= threshold + invalid relation → None (unreliable in active region)
     Args:
-        activities: DataFrame with activity data
+        activities: DataFrame with 'pchembl_value', 'context', and 'relation' columns
     Returns:
-        DataFrame with added 'is_active' boolean column used together with similarity to identify activity of
-            searched hit/lead
+        DataFrame with added 'is_active' column (True/False/None)
+    Raises:
+        ValueError: If activities DataFrame is empty
     """
+    if activities.empty:
+        raise ValueError("Cannot classify activity status on empty DataFrame")
 
     threshold_active = {
         "biochemical": 6.0,
@@ -600,25 +610,31 @@ def retrieve_activity_status(
         "unknown": 6.0,
     }
 
-    allowed_rel = {"=", "~", None, "<", "<="}
+    allowed_relations = {"=", "~", None, "<", "<="}
 
     try:
-        out = activities.copy()
-        out["pchembl_value"] = pd.to_numeric(out["pchembl_value"], errors="coerce")
+        activities = activities.copy()
+        activities["pchembl_value"] = pd.to_numeric(activities["pchembl_value"], errors="coerce")
+        context = activities.get("context", pd.Series(index=activities.index, dtype=object))
+        context = context.fillna("unknown").astype(str)
+        cutoff = context.map(threshold_active).fillna(threshold_active["unknown"])
+        relation_valid = activities.get("relation", pd.Series(index=activities.index, dtype=object)).isin(
+            allowed_relations)
+        has_pchembl = activities["pchembl_value"].notna()
+        in_active_region = activities["pchembl_value"] >= cutoff
+        activities["is_active"] = None
+        activities["is_active"] = activities["is_active"].astype(object)
+        activities.loc[has_pchembl & ~in_active_region, "is_active"] = False
+        activities.loc[has_pchembl & in_active_region & relation_valid, "is_active"] = True
+        active_count = (activities["is_active"] == True).sum()
+        inactive_count = (activities["is_active"] == False).sum()
+        unknown_count = activities["is_active"].isna().sum()
+        logger.info(
+            f"Classification complete: {active_count} active, {inactive_count} inactive, "
+            f"{unknown_count} unknown (missing pChEMBL or unreliable in active region)"
+        )
 
-        ctx = out.get("context", pd.Series(index=out.index, dtype=object))
-        ctx = ctx.fillna("unknown").astype(str)
-
-        cutoff = ctx.map(threshold_active).fillna(threshold_active["unknown"])
-
-        rel_ok = out.get("relation", pd.Series(index=out.index, dtype=object)).isin(allowed_rel)
-
-        out["is_active"] = (out["pchembl_value"] >= cutoff) & rel_ok
-        active_count = out["is_active"].sum()
-        inactive_count = (~out["is_active"]).sum()
-        logger.info(f"Classification complete: {active_count} active, {inactive_count} inactive")
-
-        return out
+        return activities
 
     except Exception as e:
         logger.error(f"Error classifying activity status: {e}")
