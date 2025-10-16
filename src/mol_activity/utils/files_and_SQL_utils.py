@@ -15,8 +15,8 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Index, func, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from src.utils.mol_activity_data_utils import generate_complete_activity_dataframe
-from src.utils.similarity_data_utils import generate_similarity_column, similarity_filter
+from src.mol_activity.utils.mol_activity_data_utils import generate_complete_activity_dataframe
+from src.mol_activity.utils.similarity_data_utils import generate_similarity_column, similarity_filter
 
 logger = logging.getLogger(__name__)
 

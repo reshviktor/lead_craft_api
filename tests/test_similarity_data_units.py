@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 from rdkit import Chem, RDLogger
-from src.utils.similarity_data_utils import calculate_tanimoto_similarity, get_tanimoto_similarity_for_query, \
+from src.mol_activity.utils.similarity_data_utils import calculate_tanimoto_similarity, get_tanimoto_similarity_for_query, \
     generate_similarity_column, similarity_filter
 
 

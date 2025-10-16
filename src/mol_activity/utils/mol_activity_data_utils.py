@@ -6,7 +6,6 @@ from ChEMBL database, including target search, activity retrieval, and bioactivi
 """
 
 from typing import Optional
-from chembl_webresource_client.new_client import new_client
 import pandas as pd
 import re
 import math
@@ -40,6 +39,7 @@ def find_targets(
     Returns:
         DataFrame with columns: target_chembl_id, pref_name, organism, target_type
     """
+    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
     logger.info(f"Searching for targets with query: '{query}', organism: '{organism}")
     try:
         t = new_client.target
@@ -76,6 +76,7 @@ def get_activities_for_target(
     Returns:
         List of activity dictionaries containing assay and measurement data
     """
+    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
     try:
         act = new_client.activity
         fields = [
@@ -279,6 +280,7 @@ def attach_smiles(
     Returns:
         DataFrame with added 'canonical_smiles' column
     """
+    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
     if batch_size <= 0:
         raise ValueError(f"batch_size {batch_size} cannot be less than 0")
     if df.empty:
@@ -431,6 +433,7 @@ def retrieve_assay_info(
     Returns:
         List of assay information dictionaries
     """
+    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
     if activities_df.empty:
         raise ValueError("Cannot retrieve assay information from empty activities dataframe")
     assays = activities_df["assay_chembl_id"].dropna().unique().tolist()
@@ -723,7 +726,7 @@ def generate_complete_activity_dataframe(
 
     Args:
         query: Target search query (e.g., "CDK2", "kinase")
-        organism: Organism filter (default: "Homo sapiens"). None for all organisms.
+        organism: Organism filter (default: "Homo sapiens"). <None> to search for all organisms.
         stats: Optional statistics object to track fetching results
 
     Returns:

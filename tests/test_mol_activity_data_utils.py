@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from collections import defaultdict
 from unittest.mock import patch, Mock
-from src.utils.mol_activity_data_utils import ConversionStatistics, find_targets, get_activities_for_target, \
+from src.mol_activity.utils.mol_activity_data_utils import ConversionStatistics, find_targets, get_activities_for_target, \
     combine_activities_for_targets, convert_standard_units_to_pchembl, retrieve_pchembl_value, create_base_dataframe, \
     retrieve_assay_info, determine_assay_type_auxiliary, retrieve_activity_status, attach_smiles, \
     generate_complete_activity_dataframe, add_pchembl_values, save_activities_in_dataframe, \
@@ -200,7 +200,7 @@ def sample_assay_info():
 class TestChEMBLAPICallsToFetchTargetsAndActivities:
     """Tests for functions that make ChEMBL API calls (with mocking)"""
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_find_targets(self, mock_client, sample_targets):
         """Test target search without limit returns all matching targets (3 targets returned and 1 excluded)"""
         mock_target = Mock()
@@ -214,7 +214,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         expected_ids = ["CHEMBL100", "CHEMBL200", "CHEMBL400"]
         assert list(result["target_chembl_id"]) == expected_ids
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_find_targets_api_error(self, mock_client):
         """Test that API errors are properly raised"""
         mock_target = Mock()
@@ -224,7 +224,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         with pytest.raises(Exception, match="ChEMBL API connection failed"):
             find_targets("EGFR", organism="Homo sapiens")
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_get_activities_for_target(self, mock_client, sample_activities):
         """Test activity retrieval with mocked API"""
         stats = ConversionStatistics()
@@ -244,7 +244,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         mock_activity.filter.assert_called_once()
         mock_only.only.assert_called_once()
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_get_activities_for_target_empty_result(self, mock_client):
         """Test handling of targets with no activities"""
         stats = ConversionStatistics()
@@ -259,7 +259,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         assert len(result) == 0
         assert stats.chembl_targets["CHEMBL9999"] == 0
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_get_activities_for_target_api_error(self, mock_client):
         """Test handling of targets with no activities"""
         mock_activity = Mock()
@@ -270,7 +270,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         with pytest.raises(Exception, match="ChEMBL API connection failed"):
             get_activities_for_target("CHEMBL9999")
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_combine_activities_for_targets(self, mock_client, sample_activities, sample_activities_ex_2):
         """Test combining activities from multiple targets"""
         stats = ConversionStatistics()
@@ -297,7 +297,7 @@ class TestChEMBLAPICallsToFetchTargetsAndActivities:
         assert stats.chembl_targets["CHEMBL2000"] == 3
         assert stats.chembl_targets["CHEMBL2001"] == 1
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_combine_activities_for_targets_without_activities(self, mock_client):
         """Test combining activities from multiple targets without activities"""
         mock_activity = Mock()
@@ -412,7 +412,7 @@ class TestRetrievePChEMBLValue:
 class TestAttachSMILES:
     """Tests for SMILES fetching and attachment with batch processing"""
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_attach_smiles_with_batching(self, mock_client, sample_molecule_structures):
         """Test SMILES fetching with batch_size=2, 3 molecules → 2 API calls."""
         df = pd.DataFrame({
@@ -440,7 +440,7 @@ class TestAttachSMILES:
         assert result.loc[2, "canonical_smiles"] == "O=[N+]([O-])c1ccc(O)c(O)c1"
         assert result["canonical_smiles"].notna().sum() == 3
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_attach_smiles_with_missing_structures(self, mock_client, sample_molecule_structures):
         """Test handling of molecules without structure data."""
         df = pd.DataFrame({
@@ -576,7 +576,7 @@ class TestSaveActivitiesInDataframe:
                                   'O=[N+]([O-])c1ccc(O)c(O)c1', None]
         return df
 
-    @patch('src.utils.mol_activity_data_utils.attach_smiles')
+    @patch('src.mol_activity.utils.mol_activity_data_utils.attach_smiles')
     def test_save_activities_with_stats_tracking(self, mock_attach_smiles, sample_activities, sample_activities_ex_2):
         """Test that statistics are correctly tracked through the pipeline"""
 
@@ -598,7 +598,7 @@ class TestSaveActivitiesInDataframe:
 class TestRetrieveAssayInfo:
     """Tests for retrieving assay information from ChEMBL"""
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_retrieve_assay_info(self, mock_client, sample_assay_info):
         """Test retrieve_assay_info with mocking, NaN assay IDs are filtered out"""
         df = pd.DataFrame({
@@ -622,7 +622,7 @@ class TestRetrieveAssayInfo:
         assert len(result) == 2
         assert result == sample_assay_info[:2]
 
-    @patch('src.utils.mol_activity_data_utils.new_client')
+    @patch('chembl_webresource_client.new_client.new_client')
     def test_retrieve_assay_info_returns_correct_structure(self, mock_client, sample_assay_info):
         """Test that returned data has correct structure"""
         df = pd.DataFrame({
@@ -707,8 +707,8 @@ class TestCreateCertainActivityMapper:
 class TestGenerateExactAssayType:
     """Tests for adding context column based on exact assay metadata"""
 
-    @patch('src.utils.mol_activity_data_utils.create_certain_activity_mapper')
-    @patch('src.utils.mol_activity_data_utils.retrieve_assay_info')
+    @patch('src.mol_activity.utils.mol_activity_data_utils.create_certain_activity_mapper')
+    @patch('src.mol_activity.utils.mol_activity_data_utils.retrieve_assay_info')
     def test_generate_exact_assay_type_basic(self, mock_retrieve, mock_mapper, sample_assay_info):
         """Test basic context assignment from assay metadata"""
         df = pd.DataFrame({
@@ -742,8 +742,8 @@ class TestGenerateExactAssayType:
         with pytest.raises(ValueError, match="Cannot retrieve assay information from empty activities dataframe"):
             generate_exact_assay_type(df)
 
-    @patch('src.utils.mol_activity_data_utils.create_certain_activity_mapper')
-    @patch('src.utils.mol_activity_data_utils.retrieve_assay_info')
+    @patch('src.mol_activity.utils.mol_activity_data_utils.create_certain_activity_mapper')
+    @patch('src.mol_activity.utils.mol_activity_data_utils.retrieve_assay_info')
     def test_generate_exact_assay_type_partial_mapping(self, mock_retrieve, mock_mapper):
         """Test handling when some assays don't have context mapping"""
 
@@ -975,7 +975,7 @@ class TestRemoveDuplicateActivities:
 class TestIntegration:
     """Integration tests for complete workflows"""
 
-    @patch("src.utils.mol_activity_data_utils.new_client")
+    @patch("chembl_webresource_client.new_client.new_client")
     def test_complete_pipeline_mock(self, mock_client, sample_targets,
                                     sample_activities, sample_assay_info,
                                     sample_molecule_structures):
@@ -1030,7 +1030,7 @@ class TestIntegration:
         assert "organism" in targets_df.columns
         assert "target_type" in targets_df.columns
 
-    @patch("src.utils.mol_activity_data_utils.new_client")
+    @patch("chembl_webresource_client.new_client.new_client")
     def test_complete_pipeline_no_targets_found(self, mock_client):
         """Test pipeline raises ValueError when no targets found"""
         mock_target = Mock()
@@ -1040,7 +1040,7 @@ class TestIntegration:
         with pytest.raises(ValueError, match="No targets found for query: 'NONEXISTENT'"):
             generate_complete_activity_dataframe("NONEXISTENT")
 
-    @patch("src.utils.mol_activity_data_utils.new_client")
+    @patch("chembl_webresource_client.new_client.new_client")
     def test_complete_pipeline_no_activities_found(self, mock_client, sample_targets):
         """Test pipeline raises ValueError when targets exist but no activities found"""
         mock_target = Mock()

@@ -17,7 +17,7 @@ from unittest.mock import patch
 from datetime import datetime
 from sqlalchemy import select, func
 
-from src.utils.files_and_SQL_utils import (
+from src.mol_activity.utils.files_and_SQL_utils import (
     Base,
     Target,
     MolecularActivityDatabase
@@ -373,9 +373,9 @@ class TestListTargets:
 class TestProcessQuery:
     """Test the main process_query workflow"""
 
-    @patch('src.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
-    @patch('src.utils.files_and_SQL_utils.generate_similarity_column')
-    @patch('src.utils.files_and_SQL_utils.similarity_filter')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_similarity_column')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.similarity_filter')
     def test_process_query_fetch_from_chembl(
             self, mock_filter, mock_similarity, mock_generate,
             db, sample_targets_df, sample_activities_df
@@ -397,9 +397,9 @@ class TestProcessQuery:
         assert len(result) == 1
         assert db.target_exists("CDK2")
 
-    @patch('src.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
-    @patch('src.utils.files_and_SQL_utils.generate_similarity_column')
-    @patch('src.utils.files_and_SQL_utils.similarity_filter')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_similarity_column')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.similarity_filter')
     def test_process_query_use_cache(
             self, mock_filter, mock_similarity, mock_generate,
             db, sample_targets_df, sample_activities_df
@@ -420,9 +420,9 @@ class TestProcessQuery:
         assert mock_filter.called
         assert len(result) == 1
 
-    @patch('src.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
-    @patch('src.utils.files_and_SQL_utils.generate_similarity_column')
-    @patch('src.utils.files_and_SQL_utils.similarity_filter')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_similarity_column')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.similarity_filter')
     def test_process_query_force_refresh(
             self, mock_filter, mock_similarity, mock_generate,
             db, sample_targets_df, sample_activities_df
@@ -444,9 +444,9 @@ class TestProcessQuery:
         assert mock_similarity.called
         assert mock_filter.called
 
-    @patch('src.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
-    @patch('src.utils.files_and_SQL_utils.generate_similarity_column')
-    @patch('src.utils.files_and_SQL_utils.similarity_filter')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_complete_activity_dataframe')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.generate_similarity_column')
+    @patch('src.mol_activity.utils.files_and_SQL_utils.similarity_filter')
     def test_process_query_empty_cache_refetch(
             self, mock_filter, mock_similarity, mock_generate,
             db, sample_targets_df, sample_activities_df
@@ -530,8 +530,10 @@ class TestIntegration:
         egfr_activities = sample_activities_df.copy()
         egfr_activities['activity_id'] = egfr_activities['activity_id'].str.replace('ACT', 'EGFR_ACT')
         egfr_targets = sample_targets_df.copy()
-        egfr_targets['target_chembl_id'] = egfr_targets['target_chembl_id'].str.replace('CHEMBL', 'EGFR_CHEMBL')
-        egfr_activities['target_chembl_id'] = egfr_activities['target_chembl_id'].str.replace('CHEMBL', 'EGFR_CHEMBL')
+        egfr_targets['target_chembl_id'] = (egfr_targets['target_chembl_id']
+                                            .str.replace('CHEMBL', 'EGFR_CHEMBL'))
+        egfr_activities['target_chembl_id'] = (egfr_activities['target_chembl_id']
+                                               .str.replace('CHEMBL', 'EGFR_CHEMBL'))
         db.save_target_data("EGFR", egfr_activities, egfr_targets)
 
         assert db.target_exists("CDK2")
