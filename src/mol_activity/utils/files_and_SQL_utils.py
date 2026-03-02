@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Index, func, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from src.mol_activity.utils.mol_activity_data_utils import generate_complete_activity_dataframe
@@ -254,17 +254,22 @@ class MolecularActivityDatabase:
             )
 
             new_activities = 0
+
+            def _convert_into_none_if_na(value: Any) -> Optional[Any]:
+                """convert pandas/numpy nun into None if nun otherwise do nothing"""
+                return None if pd.isna(value) else value # TODO write tests
+
             for _, row in activities_df.iterrows():
                 if row['activity_id'] not in existing_activity_ids:
                     session.add(Activity(
                         activity_id=row["activity_id"],
-                        molecule_chembl_id=row["molecule_chembl_id"],
-                        target_chembl_id=row["target_chembl_id"],
-                        assay_chembl_id=row.get("assay_chembl_id"),
-                        pchembl_value=row.get("pchembl_value"),
-                        context=row.get("context"),
-                        canonical_smiles=row.get("canonical_smiles"),
-                        is_active=row.get("is_active"),
+                        molecule_chembl_id=_convert_into_none_if_na(row["molecule_chembl_id"]),
+                        target_chembl_id=_convert_into_none_if_na(row["target_chembl_id"]),
+                        assay_chembl_id=_convert_into_none_if_na(row.get("assay_chembl_id")),
+                        pchembl_value=_convert_into_none_if_na(row.get("pchembl_value")),
+                        context=_convert_into_none_if_na(row.get("context")),
+                        canonical_smiles=_convert_into_none_if_na(row.get("canonical_smiles")),
+                        is_active=_convert_into_none_if_na(row.get("is_active")),
                     ))
                     new_activities += 1
 
