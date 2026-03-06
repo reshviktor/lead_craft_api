@@ -13,25 +13,48 @@ from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, Any
-from sqlalchemy import String, Integer, Float, Boolean, DateTime, ForeignKey, Index, func, create_engine, select
+from sqlalchemy import (
+    String,
+    Integer,
+    Float,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    func,
+    create_engine,
+    select,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from src.mol_activity.utils.mol_activity_data_utils import generate_complete_activity_dataframe
-from src.mol_activity.utils.similarity_data_utils import generate_similarity_column, similarity_filter
+from src.mol_activity.utils.mol_activity_data_utils import (
+    generate_complete_activity_dataframe,
+)
+from src.mol_activity.utils.similarity_data_utils import (
+    generate_similarity_column,
+    similarity_filter,
+)
 
 logger = logging.getLogger(__name__)
 
+
 class Base(DeclarativeBase):
     pass
+
 
 class Target(Base):
     """
     Main targets table storing user-facing target names.
     One target can map to multiple ChEMBL subtargets.
     """
+
     __tablename__ = "targets"
 
-    target_inner_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    target_name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    target_inner_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    target_name: Mapped[str] = mapped_column(
+        String, unique=True, nullable=False, index=True
+    )
     created_or_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -49,13 +72,14 @@ class Subtarget(Base):
     """
     ChEMBL subtargets table storing individual ChEMBL target metadata.
     """
+
     __tablename__ = "subtargets"
 
     target_chembl_id: Mapped[str] = mapped_column(String, primary_key=True)
     target_inner_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("targets.target_inner_id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
     pref_name: Mapped[Optional[str]] = mapped_column(String)
     organism: Mapped[Optional[str]] = mapped_column(String)
@@ -74,6 +98,7 @@ class Activity(Base):
     """
     Activities table storing all molecular activity data retrieved/calculated from ChEMBL.
     """
+
     __tablename__ = "activities"
 
     activity_id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -81,20 +106,25 @@ class Activity(Base):
     target_chembl_id: Mapped[str] = mapped_column(
         String,
         ForeignKey("subtargets.target_chembl_id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
     )
     assay_chembl_id: Mapped[Optional[str]] = mapped_column(String)
     pchembl_value: Mapped[Optional[float]] = mapped_column(Float)
     context: Mapped[Optional[str]] = mapped_column(String)
     canonical_smiles: Mapped[Optional[str]] = mapped_column(String)
     is_active: Mapped[Optional[bool]] = mapped_column(Boolean)
-    subtarget: Mapped["Subtarget"] = relationship("Subtarget", back_populates="activities")
+    subtarget: Mapped["Subtarget"] = relationship(
+        "Subtarget", back_populates="activities"
+    )
 
     __table_args__ = (
-        Index('idx_activities_target', 'target_chembl_id'),
-        Index('idx_activities_molecule', 'molecule_chembl_id'),
-        Index('idx_activities_target_molecule', 'target_chembl_id', 'molecule_chembl_id'),
+        Index("idx_activities_target", "target_chembl_id"),
+        Index("idx_activities_molecule", "molecule_chembl_id"),
+        Index(
+            "idx_activities_target_molecule", "target_chembl_id", "molecule_chembl_id"
+        ),
     )
+
 
 class MolecularActivityDatabase:
     """
@@ -113,12 +143,11 @@ class MolecularActivityDatabase:
         self.engine = create_engine(
             f"sqlite:///{db_path}",
             echo=False,
-            connect_args={"check_same_thread": False}
+            connect_args={"check_same_thread": False},
         )
         self.SessionLocal = sessionmaker(
-            bind=self.engine,
-            autoflush=False,
-            expire_on_commit=False)
+            bind=self.engine, autoflush=False, expire_on_commit=False
+        )
 
         Base.metadata.create_all(bind=self.engine)
         logger.info(f"Database initialized at {self.db_path}")
@@ -146,7 +175,11 @@ class MolecularActivityDatabase:
             True if target exists, False otherwise
         """
         with self.get_session() as session:
-            stmt = select(Target.target_inner_id).where(Target.target_name == target_name).limit(1)
+            stmt = (
+                select(Target.target_inner_id)
+                .where(Target.target_name == target_name)
+                .limit(1)
+            )
             return session.execute(stmt).first() is not None
 
     def get_target(self, target_name: str) -> Optional[Target]:
@@ -172,7 +205,9 @@ class MolecularActivityDatabase:
         with self.get_session() as session:
             stmt = (
                 select(Activity)
-                .join(Subtarget, Activity.target_chembl_id == Subtarget.target_chembl_id)
+                .join(
+                    Subtarget, Activity.target_chembl_id == Subtarget.target_chembl_id
+                )
                 .join(Target, Subtarget.target_inner_id == Target.target_inner_id)
                 .where(Target.target_name == target_name)
             )
@@ -200,10 +235,7 @@ class MolecularActivityDatabase:
             return df
 
     def save_target_data(
-            self,
-            target_name: str,
-            activities_df: pd.DataFrame,
-            targets_df: pd.DataFrame
+        self, target_name: str, activities_df: pd.DataFrame, targets_df: pd.DataFrame
     ) -> None:
         """
         Save new target and its activities to database.
@@ -222,24 +254,26 @@ class MolecularActivityDatabase:
                 target = Target(target_name=target_name)
                 session.add(target)
                 session.flush()
-                logger.info(f"Created new target '{target_name}' with ID {target.target_inner_id}")
+                logger.info(
+                    f"Created new target '{target_name}' with ID {target.target_inner_id}"
+                )
             else:
                 logger.info(f"Target '{target_name}' already exists, updating data")
 
             for _, row in targets_df.iterrows():
                 subtarget = session.execute(
                     select(Subtarget).where(
-                        Subtarget.target_chembl_id == row['target_chembl_id']
+                        Subtarget.target_chembl_id == row["target_chembl_id"]
                     )
                 ).scalar_one_or_none()
 
                 if not subtarget:
                     subtarget = Subtarget(
-                        target_chembl_id=row['target_chembl_id'],
+                        target_chembl_id=row["target_chembl_id"],
                         target_inner_id=target.target_inner_id,
-                        pref_name=row.get('pref_name'),
-                        organism=row.get('organism'),
-                        target_type=row.get('target_type')
+                        pref_name=row.get("pref_name"),
+                        organism=row.get("organism"),
+                        target_type=row.get("target_type"),
                     )
                     session.add(subtarget)
 
@@ -250,27 +284,41 @@ class MolecularActivityDatabase:
                     select(Activity.activity_id)
                     .join(Subtarget)
                     .where(Subtarget.target_inner_id == target.target_inner_id)
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
 
             new_activities = 0
 
             def _convert_into_none_if_na(value: Any) -> Optional[Any]:
                 """convert pandas/numpy nun into None if nun otherwise do nothing"""
-                return None if pd.isna(value) else value # TODO write tests
+                return None if pd.isna(value) else value  # TODO write tests
 
             for _, row in activities_df.iterrows():
-                if row['activity_id'] not in existing_activity_ids:
-                    session.add(Activity(
-                        activity_id=row["activity_id"],
-                        molecule_chembl_id=_convert_into_none_if_na(row["molecule_chembl_id"]),
-                        target_chembl_id=_convert_into_none_if_na(row["target_chembl_id"]),
-                        assay_chembl_id=_convert_into_none_if_na(row.get("assay_chembl_id")),
-                        pchembl_value=_convert_into_none_if_na(row.get("pchembl_value")),
-                        context=_convert_into_none_if_na(row.get("context")),
-                        canonical_smiles=_convert_into_none_if_na(row.get("canonical_smiles")),
-                        is_active=_convert_into_none_if_na(row.get("is_active")),
-                    ))
+                if row["activity_id"] not in existing_activity_ids:
+                    session.add(
+                        Activity(
+                            activity_id=row["activity_id"],
+                            molecule_chembl_id=_convert_into_none_if_na(
+                                row["molecule_chembl_id"]
+                            ),
+                            target_chembl_id=_convert_into_none_if_na(
+                                row["target_chembl_id"]
+                            ),
+                            assay_chembl_id=_convert_into_none_if_na(
+                                row.get("assay_chembl_id")
+                            ),
+                            pchembl_value=_convert_into_none_if_na(
+                                row.get("pchembl_value")
+                            ),
+                            context=_convert_into_none_if_na(row.get("context")),
+                            canonical_smiles=_convert_into_none_if_na(
+                                row.get("canonical_smiles")
+                            ),
+                            is_active=_convert_into_none_if_na(row.get("is_active")),
+                        )
+                    )
                     new_activities += 1
 
             session.flush()
@@ -289,9 +337,15 @@ class MolecularActivityDatabase:
         """
         with self.get_session() as session:
             stats = {
-                'targets': session.execute(select(func.count(Target.target_inner_id))).scalar(),
-                'subtargets': session.execute(select(func.count(Subtarget.target_chembl_id))).scalar(),
-                'activities': session.execute(select(func.count(Activity.activity_id))).scalar()
+                "targets": session.execute(
+                    select(func.count(Target.target_inner_id))
+                ).scalar(),
+                "subtargets": session.execute(
+                    select(func.count(Subtarget.target_chembl_id))
+                ).scalar(),
+                "activities": session.execute(
+                    select(func.count(Activity.activity_id))
+                ).scalar(),
             }
             return stats
 
@@ -319,13 +373,13 @@ class MolecularActivityDatabase:
             return True
 
     def process_query(
-            self,
-            target_name: str,
-            query_smiles: str,
-            min_similarity: float = 0.8,
-            max_molecules: int = 10,
-            organism: Optional[str] = "Homo sapiens",
-            force_refresh: bool = False
+        self,
+        target_name: str,
+        query_smiles: str,
+        min_similarity: float = 0.8,
+        max_molecules: int = 10,
+        organism: Optional[str] = "Homo sapiens",
+        force_refresh: bool = False,
     ) -> pd.DataFrame:
         """
         Main workflow: check database or fetch from ChEMBL, then filter by similarity.
@@ -357,24 +411,21 @@ class MolecularActivityDatabase:
             else:
                 logger.info(f"Target '{target_name}' not found in database")
 
-            logger.info(f"Fetching fresh data from ChEMBL...")
+            logger.info("Fetching fresh data from ChEMBL...")
             activities_df, targets_df = generate_complete_activity_dataframe(
-                query=target_name,
-                organism=organism
+                query=target_name, organism=organism
             )
             self.save_target_data(target_name, activities_df, targets_df)
 
         logger.info(f"Calculating similarity to query molecule: {query_smiles}")
         activities_with_sim = generate_similarity_column(
-            activities_df,
-            query_smiles=query_smiles,
-            smiles_col="canonical_smiles"
+            activities_df, query_smiles=query_smiles, smiles_col="canonical_smiles"
         )
 
         filtered_df = similarity_filter(
             activities_with_sim,
             min_similarity=min_similarity,
-            max_molecules=max_molecules
+            max_molecules=max_molecules,
         )
 
         logger.info(
@@ -401,8 +452,14 @@ class MolecularActivityDatabase:
                     Target.created_or_updated_at,
                     func.count(Subtarget.target_chembl_id).label("num_subtargets"),
                 )
-                .outerjoin(Subtarget, Target.target_inner_id == Subtarget.target_inner_id)
-                .group_by(Target.target_inner_id, Target.target_name, Target.created_or_updated_at)
+                .outerjoin(
+                    Subtarget, Target.target_inner_id == Subtarget.target_inner_id
+                )
+                .group_by(
+                    Target.target_inner_id,
+                    Target.target_name,
+                    Target.created_or_updated_at,
+                )
                 .order_by(Target.target_inner_id)
             ).all()
 

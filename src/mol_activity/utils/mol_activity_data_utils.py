@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConversionStatistics:
     """Statistics/errors collected during pChEMBL fetching and conversion process"""
+
     chembl_targets: dict = field(default_factory=dict)
     unknown_units: dict = field(default_factory=lambda: defaultdict(int))
     invalid_values: int = 0
@@ -27,8 +28,8 @@ class ConversionStatistics:
 
 
 def find_targets(
-        query: str,
-        organism: Optional[str] = "Homo sapiens",
+    query: str,
+    organism: Optional[str] = "Homo sapiens",
 ) -> pd.DataFrame:
     """
     Search for biological targets in ChEMBL database matching the query.
@@ -39,7 +40,10 @@ def find_targets(
     Returns:
         DataFrame with columns: target_chembl_id, pref_name, organism, target_type
     """
-    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
+    from chembl_webresource_client.new_client import (
+        new_client,
+    )  # could raise Error on importing stage if ChEMBL is down
+
     logger.info(f"Searching for targets with query: '{query}', organism: '{organism}")
     try:
         t = new_client.target
@@ -47,12 +51,14 @@ def find_targets(
         rows = []
         for hit in hits:
             if organism is None or hit.get("organism") == organism:
-                rows.append({
-                    "target_chembl_id": hit["target_chembl_id"],
-                    "pref_name": hit.get("pref_name"),
-                    "organism": hit.get("organism"),
-                    "target_type": hit.get("target_type"),
-                })
+                rows.append(
+                    {
+                        "target_chembl_id": hit["target_chembl_id"],
+                        "pref_name": hit.get("pref_name"),
+                        "organism": hit.get("organism"),
+                        "target_type": hit.get("target_type"),
+                    }
+                )
         logger.info(f"Found {len(rows)} targets matching criteria")
 
         return pd.DataFrame(rows)
@@ -63,9 +69,9 @@ def find_targets(
 
 
 def get_activities_for_target(
-        target_chembl_id: str,
-        types: tuple[str] = ("IC50", "Ki", "Kd", "EC50"),
-        stats: Optional[ConversionStatistics] = None
+    target_chembl_id: str,
+    types: tuple[str] = ("IC50", "Ki", "Kd", "EC50"),
+    stats: Optional[ConversionStatistics] = None,
 ) -> list[Optional[dict[str, str]]]:
     """
     Retrieve bioactivity data for a specific target from ChEMBL.
@@ -76,17 +82,27 @@ def get_activities_for_target(
     Returns:
         List of activity dictionaries containing assay and measurement data
     """
-    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
+    from chembl_webresource_client.new_client import (
+        new_client,
+    )  # could raise Error on importing stage if ChEMBL is down
+
     try:
         act = new_client.activity
         fields = [
-            "activity_id", "assay_chembl_id", "assay_type", "assay_confidence_score",
-            "molecule_chembl_id", "standard_type", "standard_value", "standard_units",
-            "relation", "pchembl_value", "target_chembl_id"
+            "activity_id",
+            "assay_chembl_id",
+            "assay_type",
+            "assay_confidence_score",
+            "molecule_chembl_id",
+            "standard_type",
+            "standard_value",
+            "standard_units",
+            "relation",
+            "pchembl_value",
+            "target_chembl_id",
         ]
         activities_found = act.filter(
-            target_chembl_id=target_chembl_id,
-            standard_type__in=list(types)
+            target_chembl_id=target_chembl_id, standard_type__in=list(types)
         ).only(fields)
         activities = list(activities_found)
         if stats:
@@ -100,9 +116,9 @@ def get_activities_for_target(
 
 
 def combine_activities_for_targets(
-        target_ids: list[str],
-        types: tuple[str] = ("IC50", "Ki", "Kd", "EC50"),
-        stats: Optional[ConversionStatistics] = None
+    target_ids: list[str],
+    types: tuple[str] = ("IC50", "Ki", "Kd", "EC50"),
+    stats: Optional[ConversionStatistics] = None,
 ) -> list[Optional[dict[str, str]]]:
     """
     Combines bioactivity data from multiple targets.
@@ -122,20 +138,20 @@ def combine_activities_for_targets(
     all_activities = []
 
     for i, target_id in enumerate(target_ids):
-        activities = get_activities_for_target(target_chembl_id=target_id, types=types, stats=stats)
+        activities = get_activities_for_target(
+            target_chembl_id=target_id, types=types, stats=stats
+        )
         if activities:
             all_activities.extend(activities)
 
     if stats and stats.chembl_targets:
         sorted_targets = sorted(
-            stats.chembl_targets.items(),
-            key=lambda x: x[1],
-            reverse=True
+            stats.chembl_targets.items(), key=lambda x: x[1], reverse=True
         )
         targets_per_line = 5
         lines = [f"Retrieved activities from {len(sorted_targets)} targets:"]
         for i in range(0, len(sorted_targets), targets_per_line):
-            batch = sorted_targets[i:i + targets_per_line]
+            batch = sorted_targets[i : i + targets_per_line]
             line = ", ".join([f"{tid}: {count}" for tid, count in batch])
             lines.append(f"  {line}")
         logger.info("\n".join(lines))
@@ -149,9 +165,7 @@ def combine_activities_for_targets(
 
 
 def convert_standard_units_to_pchembl(
-        units: str,
-        value: float,
-        stats: Optional[ConversionStatistics] = None
+    units: str, value: float, stats: Optional[ConversionStatistics] = None
 ) -> Optional[float]:
     """
     Convert activity value in various units to pChEMBL scale (-log10(Molar)).
@@ -197,8 +211,7 @@ def convert_standard_units_to_pchembl(
 
 
 def retrieve_pchembl_value(
-        activity_entry: dict,
-        stats: Optional[ConversionStatistics] = None
+    activity_entry: dict, stats: Optional[ConversionStatistics] = None
 ) -> Optional[float]:
     """
     Extract or calculate pChEMBL value from activity data.
@@ -219,7 +232,8 @@ def retrieve_pchembl_value(
             pchembl_value = float(activity_entry["pchembl_value"])
         except ValueError as e:
             logger.debug(
-                f"pchembl_value {activity_entry['pchembl_value']} is not possible to convert to float: {e}")
+                f"pchembl_value {activity_entry['pchembl_value']} is not possible to convert to float: {e}"
+            )
         else:
             return pchembl_value
 
@@ -232,9 +246,7 @@ def retrieve_pchembl_value(
         if units:
             try:
                 pchembl_value_su = convert_standard_units_to_pchembl(
-                    units=units,
-                    value=value,
-                    stats=stats
+                    units=units, value=value, stats=stats
                 )
             except (ValueError, KeyError) as e:
                 logger.debug(f"Could not convert value: {e}")
@@ -251,9 +263,7 @@ def retrieve_pchembl_value(
         if units:
             try:
                 pchembl_value_u = convert_standard_units_to_pchembl(
-                    units=units,
-                    value=value,
-                    stats=stats
+                    units=units, value=value, stats=stats
                 )
             except (ValueError, KeyError) as e:
                 logger.debug(f"Could not convert value: {e}")
@@ -261,16 +271,15 @@ def retrieve_pchembl_value(
                 if pchembl_value_u is not None:
                     return pchembl_value_u
 
-    logger.debug(f"Could not extract pchembl for activity {activity_entry.get('activity_id')}")
+    logger.debug(
+        f"Could not extract pchembl for activity {activity_entry.get('activity_id')}"
+    )
     if stats:
         stats.no_activity += 1
     return None
 
 
-def attach_smiles(
-        df: pd.DataFrame,
-        batch_size=100
-) -> pd.DataFrame:
+def attach_smiles(df: pd.DataFrame, batch_size=100) -> pd.DataFrame:
     """
     Fetch and attach canonical SMILES strings to molecules in the DataFrame.
     Retrieves SMILES from ChEMBL in batches of batch_size (default 100) for efficiency.
@@ -280,11 +289,14 @@ def attach_smiles(
     Returns:
         DataFrame with added 'canonical_smiles' column
     """
-    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
+    from chembl_webresource_client.new_client import (
+        new_client,
+    )  # could raise Error on importing stage if ChEMBL is down
+
     if batch_size <= 0:
         raise ValueError(f"batch_size {batch_size} cannot be less than 0")
     if df.empty:
-        raise ValueError(f"Empty DataFrame received from ChEMBL")
+        raise ValueError("Empty DataFrame received from ChEMBL")
 
     logger.info("Fetching SMILES strings for molecules")
 
@@ -294,7 +306,10 @@ def attach_smiles(
         logger.info(f"Fetching SMILES for {len(molecule_ids)} unique molecules")
 
         # without batches there could be problems with to many api calls to chembl
-        batches = [molecule_ids[i:i + batch_size] for i in range(0, len(molecule_ids), batch_size)]
+        batches = [
+            molecule_ids[i : i + batch_size]
+            for i in range(0, len(molecule_ids), batch_size)
+        ]
         id_to_smiles = {}
 
         for idx, batch in enumerate(batches):
@@ -318,7 +333,9 @@ def attach_smiles(
         df["canonical_smiles"] = df["molecule_chembl_id"].map(id_to_smiles)
 
         valid_smiles = df["canonical_smiles"].notna().sum()
-        logger.info(f"Successfully retrieved SMILES for {valid_smiles}/{len(df)} activities")
+        logger.info(
+            f"Successfully retrieved SMILES for {valid_smiles}/{len(df)} activities"
+        )
 
         return df
 
@@ -327,9 +344,7 @@ def attach_smiles(
         raise
 
 
-def create_base_dataframe(
-        activities: list[dict]
-) -> pd.DataFrame:
+def create_base_dataframe(activities: list[dict]) -> pd.DataFrame:
     """
     Extract essential columns from activities list and create initial DataFrame.
 
@@ -340,17 +355,22 @@ def create_base_dataframe(
         DataFrame with essential activity columns
     """
     final_cols = [
-        "molecule_chembl_id", "activity_id", "assay_chembl_id",
-        "assay_type", "standard_type", "relation", "target_chembl_id"
+        "molecule_chembl_id",
+        "activity_id",
+        "assay_chembl_id",
+        "assay_type",
+        "standard_type",
+        "relation",
+        "target_chembl_id",
     ]
 
     return pd.DataFrame(activities)[final_cols]
 
 
 def add_pchembl_values(
-        df: pd.DataFrame,
-        activities: list[dict],
-        stats: Optional[ConversionStatistics] = None
+    df: pd.DataFrame,
+    activities: list[dict],
+    stats: Optional[ConversionStatistics] = None,
 ) -> pd.DataFrame:
     """
     Calculate and add pChEMBL values to DataFrame.
@@ -369,30 +389,36 @@ def add_pchembl_values(
             f"number of activities DataFrame ({len(df)})"
         )
     df = df.copy()
-    df["pchembl_value"] = [retrieve_pchembl_value(act, stats=stats) for act in activities]
+    df["pchembl_value"] = [
+        retrieve_pchembl_value(act, stats=stats) for act in activities
+    ]
 
     if stats:
         logger.warning(f"Negative values skipped: {stats.pchembl_negative_values}")
         logger.warning(f"Unknown units found: {len(stats.unknown_units)} types")
         if len(stats.unknown_units.items()) >= 1:
-            sorted_units = sorted(stats.unknown_units.items(), key=lambda x: x[1], reverse=True)
+            sorted_units = sorted(
+                stats.unknown_units.items(), key=lambda x: x[1], reverse=True
+            )
             units_per_line = 5
             lines = ["Unknown units found:"]
             for i in range(0, len(sorted_units), units_per_line):
-                batch = sorted_units[i:i + units_per_line]
+                batch = sorted_units[i : i + units_per_line]
                 line = ", ".join([f"{unit}: {count}" for unit, count in batch])
                 lines.append(f"  {line}")
             logger.info("\n".join(lines))
 
     valid_pchembl = df["pchembl_value"].notna().sum()
-    logger.info(f"Successfully calculated pChEMBL for {valid_pchembl}/{len(df)} activities")
+    logger.info(
+        f"Successfully calculated pChEMBL for {valid_pchembl}/{len(df)} activities"
+    )
     df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
     return df
 
 
 def save_activities_in_dataframe(
-        activities: list[dict[str, str]],
-        stats: Optional[ConversionStatistics] = None,
+    activities: list[dict[str, str]],
+    stats: Optional[ConversionStatistics] = None,
 ) -> pd.DataFrame:
     """
     Convert list of activity dictionaries to DataFrame, cut off non-essential columns and
@@ -423,9 +449,7 @@ def save_activities_in_dataframe(
         raise
 
 
-def retrieve_assay_info(
-        activities_df: pd.DataFrame
-) -> list[dict]:
+def retrieve_assay_info(activities_df: pd.DataFrame) -> list[dict]:
     """
     Extract detailed assay information from ChEMBL for all unique assays.
     Args:
@@ -433,15 +457,21 @@ def retrieve_assay_info(
     Returns:
         List of assay information dictionaries
     """
-    from chembl_webresource_client.new_client import new_client # could raise Error on importing stage if ChEMBL is down
+    from chembl_webresource_client.new_client import (
+        new_client,
+    )  # could raise Error on importing stage if ChEMBL is down
+
     if activities_df.empty:
-        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
+        raise ValueError(
+            "Cannot retrieve assay information from empty activities dataframe"
+        )
     assays = activities_df["assay_chembl_id"].dropna().unique().tolist()
     logger.info(f"Extracting assay information for {len(assays)} unique assays")
     try:
         all_assays_info = list(
-            new_client.assay.filter(assay_chembl_id__in=assays)
-            .only(["assay_chembl_id", "assay_cell_type", "bao_label"])
+            new_client.assay.filter(assay_chembl_id__in=assays).only(
+                ["assay_chembl_id", "assay_cell_type", "bao_label"]
+            )
         )
         logger.info(f"Retrieved information for {len(all_assays_info)} assays")
 
@@ -452,9 +482,7 @@ def retrieve_assay_info(
         raise
 
 
-def determine_assay_type_auxiliary(
-        assay_info: dict
-) -> Optional[str]:
+def determine_assay_type_auxiliary(assay_info: dict) -> Optional[str]:
     """
     Determine assay context (biochemical/cellular/organism) from BAO label and cell type.
     Args:
@@ -484,9 +512,7 @@ def determine_assay_type_auxiliary(
     return context
 
 
-def create_certain_activity_mapper(
-        all_assays_info: list[dict]
-) -> dict:
+def create_certain_activity_mapper(all_assays_info: list[dict]) -> dict:
     """
     Create mapping of assay IDs to their experimental contexts.
     Args:
@@ -509,9 +535,7 @@ def create_certain_activity_mapper(
     return assay_type
 
 
-def generate_exact_assay_type(
-        activities: pd.DataFrame
-) -> pd.DataFrame:
+def generate_exact_assay_type(activities: pd.DataFrame) -> pd.DataFrame:
     """
     Add 'context' column to activities based on exact assay metadata from ChEMBL where assay type can be directly taken
     from metadata
@@ -521,7 +545,9 @@ def generate_exact_assay_type(
         DataFrame with added 'context' column
     """
     if activities.empty:
-        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
+        raise ValueError(
+            "Cannot retrieve assay information from empty activities dataframe"
+        )
     logger.info("Generating exact assay context types")
     try:
         df = activities.copy()
@@ -529,7 +555,9 @@ def generate_exact_assay_type(
         ctx_map = create_certain_activity_mapper(all_assays_info)
         df["context"] = df["assay_chembl_id"].map(ctx_map)
         mapped_count = df["context"].notna().sum()
-        logger.info(f"Assigned exact context for {mapped_count}/{len(df)} activities exactly from metadata")
+        logger.info(
+            f"Assigned exact context for {mapped_count}/{len(df)} activities exactly from metadata"
+        )
 
         return df
 
@@ -538,9 +566,7 @@ def generate_exact_assay_type(
         raise
 
 
-def generate_approx_assay_type_for_row(
-        activities: pd.DataFrame
-) -> pd.DataFrame:
+def generate_approx_assay_type_for_row(activities: pd.DataFrame) -> pd.DataFrame:
     """
     Infer missing assay contexts using logical conclusions (approximations) based on standard_type and assay_type.
     Approximations:
@@ -556,7 +582,9 @@ def generate_approx_assay_type_for_row(
         DataFrame with filled 'context' column
     """
     if activities.empty:
-        raise ValueError("Cannot retrieve assay information from empty activities dataframe")
+        raise ValueError(
+            "Cannot retrieve assay information from empty activities dataframe"
+        )
     logger.info("Inferring missing assay contexts using approximations")
 
     df = activities.copy()
@@ -571,14 +599,14 @@ def generate_approx_assay_type_for_row(
     df.loc[unknown & (assay_type == "B") & (stype == "IC50"), "context"] = "biochemical"
     after_inference = df["context"].isna().sum()
     delta = before_inference - after_inference
-    logger.info(f"Assigned exact context for {delta} activities approximately from metadata")
+    logger.info(
+        f"Assigned exact context for {delta} activities approximately from metadata"
+    )
 
     return df
 
 
-def retrieve_activity_status(
-        activities: pd.DataFrame
-) -> pd.DataFrame:
+def retrieve_activity_status(activities: pd.DataFrame) -> pd.DataFrame:
     """
     Classify activities as active/inactive based on pChEMBL value and assay context.
 
@@ -617,20 +645,27 @@ def retrieve_activity_status(
 
     try:
         activities = activities.copy()
-        activities["pchembl_value"] = pd.to_numeric(activities["pchembl_value"], errors="coerce")
-        context = activities.get("context", pd.Series(index=activities.index, dtype=object))
+        activities["pchembl_value"] = pd.to_numeric(
+            activities["pchembl_value"], errors="coerce"
+        )
+        context = activities.get(
+            "context", pd.Series(index=activities.index, dtype=object)
+        )
         context = context.fillna("unknown").astype(str)
         cutoff = context.map(threshold_active).fillna(threshold_active["unknown"])
-        relation_valid = activities.get("relation", pd.Series(index=activities.index, dtype=object)).isin(
-            allowed_relations)
+        relation_valid = activities.get(
+            "relation", pd.Series(index=activities.index, dtype=object)
+        ).isin(allowed_relations)
         has_pchembl = activities["pchembl_value"].notna()
         in_active_region = activities["pchembl_value"] >= cutoff
         activities["is_active"] = None
         activities["is_active"] = activities["is_active"].astype(object)
         activities.loc[has_pchembl & ~in_active_region, "is_active"] = False
-        activities.loc[has_pchembl & in_active_region & relation_valid, "is_active"] = True
-        active_count = (activities["is_active"] == True).sum()
-        inactive_count = (activities["is_active"] == False).sum()
+        activities.loc[has_pchembl & in_active_region & relation_valid, "is_active"] = (
+            True
+        )
+        active_count = activities["is_active"].eq(True).sum()
+        inactive_count = activities["is_active"].eq(False).sum()
         unknown_count = activities["is_active"].isna().sum()
         logger.info(
             f"Classification complete: {active_count} active, {inactive_count} inactive, "
@@ -644,9 +679,7 @@ def retrieve_activity_status(
         raise
 
 
-def remove_duplicate_activities(
-        df: pd.DataFrame
-) -> pd.DataFrame:
+def remove_duplicate_activities(df: pd.DataFrame) -> pd.DataFrame:
     """
     Remove duplicate activities based on molecule, target, and context combination.
     For same molecule + target + context, keep entry with highest pChEMBL value.
@@ -670,24 +703,29 @@ def remove_duplicate_activities(
     dedup_cols = ["molecule_chembl_id", "target_chembl_id", "context"]
     for col in dedup_cols:
         if col not in df.columns:
-            raise ValueError(f"Column {col} not in dataframe columns during deduplication process")
+            raise ValueError(
+                f"Column {col} not in dataframe columns during deduplication process"
+            )
     df["_temp_context"] = df["context"].fillna("<none>")
     df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
-    sort_cols = ["molecule_chembl_id", "target_chembl_id", "_temp_context", "pchembl_value"]
+    sort_cols = [
+        "molecule_chembl_id",
+        "target_chembl_id",
+        "_temp_context",
+        "pchembl_value",
+    ]
     sort_order = [True, True, True, False]
 
     if "activity_id" in df.columns:
         sort_cols.append("activity_id")
         sort_order.append(True)
 
-    df_sorted = df.sort_values(
-        by=sort_cols,
-        ascending=sort_order,
-        na_position='last'
-    )
+    df_sorted = df.sort_values(by=sort_cols, ascending=sort_order, na_position="last")
     df_dedup = (
-        df_sorted
-        .drop_duplicates(subset=["molecule_chembl_id", "target_chembl_id", "_temp_context"], keep='first')
+        df_sorted.drop_duplicates(
+            subset=["molecule_chembl_id", "target_chembl_id", "_temp_context"],
+            keep="first",
+        )
         .drop(columns=["_temp_context"])
         .reset_index(drop=True)
     )
@@ -709,9 +747,9 @@ def remove_duplicate_activities(
 
 
 def generate_complete_activity_dataframe(
-        query: str,
-        organism: Optional[str] = "Homo sapiens",
-        stats: Optional[ConversionStatistics] = None
+    query: str,
+    organism: Optional[str] = "Homo sapiens",
+    stats: Optional[ConversionStatistics] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Main pipeline to generate complete molecular activity dataset for a target query.
@@ -740,43 +778,63 @@ def generate_complete_activity_dataframe(
     Raises:
         ValueError: If no targets or no activities found for the query
     """
-    logger.info(f"Starting main pipeline to generate activities for query: '{query}'\n{'=' * 60}\n")
+    logger.info(
+        f"Starting main pipeline to generate activities for query: '{query}'\n{'=' * 60}\n"
+    )
 
-    logger.info(f"Step 1/7: Search for targets matching query")
+    logger.info("Step 1/7: Search for targets matching query")
     targets = find_targets(query, organism=organism)
     if targets.empty:
         logger.error(f"No targets found for query: '{query}'")
         raise ValueError(f"No targets found for query: '{query}'")
 
-    logger.info(f"Step 2/7: Retrieving combined activities")
-    combined_activities = combine_activities_for_targets(targets["target_chembl_id"].tolist(), stats=stats)
+    logger.info("Step 2/7: Retrieving combined activities")
+    combined_activities = combine_activities_for_targets(
+        targets["target_chembl_id"].tolist(), stats=stats
+    )
     if len(combined_activities) == 0:
         logger.error(f"No activities found for query: '{query}'")
-        raise ValueError(f"No activities found for any targets matching query: '{query}'")
+        raise ValueError(
+            f"No activities found for any targets matching query: '{query}'"
+        )
 
-    logger.info(f"Step 3/7: Creating Dataframe with activities")
+    logger.info("Step 3/7: Creating Dataframe with activities")
     activities = save_activities_in_dataframe(combined_activities, stats=stats)
 
-    logger.info(f"Step 4/7: Determining exact assay contexts")
+    logger.info("Step 4/7: Determining exact assay contexts")
     activities_with_exact_assays = generate_exact_assay_type(activities)
 
-    logger.info(f"Step 5/7: Determining remaining assay contexts")
-    activities_with_all_assays = generate_approx_assay_type_for_row(activities_with_exact_assays)
+    logger.info("Step 5/7: Determining remaining assay contexts")
+    activities_with_all_assays = generate_approx_assay_type_for_row(
+        activities_with_exact_assays
+    )
 
-    logger.info(f"Step 6/7: Classifying activity status")
+    logger.info("Step 6/7: Classifying activity status")
     activities_all = retrieve_activity_status(activities_with_all_assays)
 
-    logger.info(f"Step 7/7: Removing duplicate activities")
+    logger.info("Step 7/7: Removing duplicate activities")
     unique_activities = remove_duplicate_activities(activities_all)
 
-    final_df = unique_activities[[
-        "molecule_chembl_id", "activity_id", "target_chembl_id", "assay_chembl_id",
-        "pchembl_value", "context", "canonical_smiles", "is_active",
-    ]]
+    final_df = unique_activities[
+        [
+            "molecule_chembl_id",
+            "activity_id",
+            "target_chembl_id",
+            "assay_chembl_id",
+            "pchembl_value",
+            "context",
+            "canonical_smiles",
+            "is_active",
+        ]
+    ]
 
     used_target_ids = final_df["target_chembl_id"].unique()
-    targets_filtered = targets[targets["target_chembl_id"].isin(used_target_ids)].drop_duplicates()
+    targets_filtered = targets[
+        targets["target_chembl_id"].isin(used_target_ids)
+    ].drop_duplicates()
 
-    logger.info(f"Pipeline complete: {len(final_df)} activities from {len(targets_filtered)} targets")
+    logger.info(
+        f"Pipeline complete: {len(final_df)} activities from {len(targets_filtered)} targets"
+    )
 
     return final_df, targets_filtered

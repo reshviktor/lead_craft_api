@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_tanimoto_similarity(
-        mol_search: Chem.rdchem.Mol,
-        smiles_from_df: Optional[str]
+    mol_search: Chem.rdchem.Mol, smiles_from_df: Optional[str]
 ) -> Optional[float]:
     """
     Calculate Tanimoto similarity between query molecule and target SMILES.
@@ -47,12 +46,12 @@ def calculate_tanimoto_similarity(
     fingerprints_search_mol = rdMolDescriptors.GetMACCSKeysFingerprint(mol_search)
     fingerprints_for_df_mol = rdMolDescriptors.GetMACCSKeysFingerprint(molecule_from_df)
 
-    return DataStructs.TanimotoSimilarity(fingerprints_search_mol, fingerprints_for_df_mol)
+    return DataStructs.TanimotoSimilarity(
+        fingerprints_search_mol, fingerprints_for_df_mol
+    )
 
 
-def get_tanimoto_similarity_for_query(
-        smiles: str
-) -> Callable[[str], Optional[float]]:
+def get_tanimoto_similarity_for_query(smiles: str) -> Callable[[str], Optional[float]]:
     """An auxiliary function to use similarity_tanimoto_search with dataframe map.
     Args:
         smiles: Query SMILES string
@@ -68,9 +67,7 @@ def get_tanimoto_similarity_for_query(
 
 
 def generate_similarity_column(
-        df: pd.DataFrame,
-        query_smiles: str,
-        smiles_col: str = "canonical_smiles"
+    df: pd.DataFrame, query_smiles: str, smiles_col: str = "canonical_smiles"
 ) -> pd.DataFrame:
     """
     Add tanimoto_similarity column to DataFrame based on query SMILES.
@@ -85,10 +82,14 @@ def generate_similarity_column(
     scorer = get_tanimoto_similarity_for_query(query_smiles)
     df = df.copy()
     df["tanimoto_similarity"] = df[smiles_col].map(scorer)
-    df["tanimoto_similarity"] = pd.to_numeric(df["tanimoto_similarity"], errors="coerce")
+    df["tanimoto_similarity"] = pd.to_numeric(
+        df["tanimoto_similarity"], errors="coerce"
+    )
     tanimoto_sim_total = df["tanimoto_similarity"].notna().sum()
     smiles_total = df[smiles_col].notna().sum()
-    logger.info(f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles")
+    logger.info(
+        f"Generated {tanimoto_sim_total} tanimoto similarity values out of {smiles_total} smiles"
+    )
     if smiles_total > tanimoto_sim_total:
         logger.warning(f"Not converted: {smiles_total - tanimoto_sim_total} smiles")
 
@@ -96,9 +97,7 @@ def generate_similarity_column(
 
 
 def similarity_filter(
-        df: pd.DataFrame,
-        min_similarity: float = 0.8,
-        max_molecules: Optional[int] = 10
+    df: pd.DataFrame, min_similarity: float = 0.8, max_molecules: Optional[int] = 10
 ) -> pd.DataFrame:
     """
     Filter molecules by Tanimoto similarity and return all activity rows for the most similar molecules.
@@ -123,7 +122,9 @@ def similarity_filter(
         raise ValueError(f"DataFrame must contain columns: {missing_columns}")
 
     if not 0.0 <= float(min_similarity) <= 1.0:
-        raise ValueError(f"min_similarity must be between 0 and 1, got {min_similarity}")
+        raise ValueError(
+            f"min_similarity must be between 0 and 1, got {min_similarity}"
+        )
 
     if max_molecules is not None and max_molecules < 1:
         raise ValueError(f"max_molecules must be positive or None, got {max_molecules}")
@@ -137,11 +138,9 @@ def similarity_filter(
 
         return filtered_by_similarity.reset_index(drop=True)
 
-    molecules_with_activity = (
-        filtered_by_similarity
-        .groupby("molecule_chembl_id")["pchembl_value"]
-        .apply(lambda values: values.notna().any())
-    )
+    molecules_with_activity = filtered_by_similarity.groupby("molecule_chembl_id")[
+        "pchembl_value"
+    ].apply(lambda values: values.notna().any())
     valid_molecule_ids = molecules_with_activity[molecules_with_activity].index.tolist()
     if not valid_molecule_ids:
         logger.warning("No molecules with valid pChEMBL values found")
@@ -152,21 +151,23 @@ def similarity_filter(
         filtered_by_similarity["molecule_chembl_id"].isin(valid_molecule_ids)
     ]
     best_similarity_per_molecule = (
-        molecules_with_valid_activity
-        .groupby("molecule_chembl_id")["tanimoto_similarity"]
+        molecules_with_valid_activity.groupby("molecule_chembl_id")[
+            "tanimoto_similarity"
+        ]
         .max()
         .sort_values(ascending=False)
     )
     if max_molecules is not None:
-        top_molecule_ids = best_similarity_per_molecule.head(max_molecules).index.tolist()
+        top_molecule_ids = best_similarity_per_molecule.head(
+            max_molecules
+        ).index.tolist()
     else:
         top_molecule_ids = best_similarity_per_molecule.index.tolist()
     result = molecules_with_valid_activity[
         molecules_with_valid_activity["molecule_chembl_id"].isin(top_molecule_ids)
     ]
     result = result.sort_values(
-        ["tanimoto_similarity", "molecule_chembl_id"],
-        ascending=[False, True]
+        ["tanimoto_similarity", "molecule_chembl_id"], ascending=[False, True]
     ).reset_index(drop=True)
     logger.info(
         f"Returning {len(result)} rows from {result['molecule_chembl_id'].nunique()} unique molecules"

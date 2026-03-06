@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 def basic_query(
-        target: str,
-        smiles: str,
-        min_similarity: float = 0.8,
-        max_molecules: int = 10,
-        organism: Optional[str] = "Homo sapiens",
-        force_refresh: bool = False,
-        db_path: Optional[str] = None,
+    target: str,
+    smiles: str,
+    min_similarity: float = 0.8,
+    max_molecules: int = 10,
+    organism: Optional[str] = "Homo sapiens",
+    force_refresh: bool = False,
+    db_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Main pipeline entry point for molecular similarity search against bioactivity data.
@@ -76,48 +76,40 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="leadcraft",
         description="LeadCraft: bioactivity retrieval and similarity search via ChEMBL.",
     )
-    parser.add_argument(
-        "--target",
-        required=True,
-        help="Target name (e.g. CDK2, EGFR)"
-    )
-    parser.add_argument(
-        "--smiles",
-        required=True,
-        help="Query molecule SMILES string"
-    )
+    parser.add_argument("--target", required=True, help="Target name (e.g. CDK2, EGFR)")
+    parser.add_argument("--smiles", required=True, help="Query molecule SMILES string")
     parser.add_argument(
         "--min-similarity",
         type=float,
         default=0.8,
-        help="Minimum Tanimoto similarity threshold [0-1] (default: 0.8)"
+        help="Minimum Tanimoto similarity threshold [0-1] (default: 0.8)",
     )
     parser.add_argument(
         "--max-molecules",
         type=int,
         default=10,
-        help="Maximum number of similar molecules to return (default: 10)"
+        help="Maximum number of similar molecules to return (default: 10)",
     )
     parser.add_argument(
         "--organism",
         default="Homo sapiens",
-        help='Organism filter for ChEMBL (default: "Homo sapiens", use "all" for no filter)'
+        help='Organism filter for ChEMBL (default: "Homo sapiens", use "all" for no filter)',
     )
     parser.add_argument(
         "--force-refresh",
         action="store_true",
-        help="Re-fetch data from ChEMBL even if cached"
+        help="Re-fetch data from ChEMBL even if cached",
     )
     parser.add_argument(
         "--db-path",
         default=None,
-        help="Path to SQLite database file (default: project database path)"
+        help="Path to SQLite database file (default: project database path)",
     )
     parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level (default: INFO)"
+        help="Logging level (default: INFO)",
     )
 
     return parser
