@@ -1,0 +1,23 @@
+name: Run Tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: lead_craft_api
+          auto-activate-base: false
+
+      - name: Run tests
+        shell: bash -el {0}
+        run: pytest tests/ -v
