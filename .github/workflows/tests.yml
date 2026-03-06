@@ -4,12 +4,21 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
-
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash -el {0}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
 
       - name: Set up Conda
         uses: conda-incubator/setup-miniconda@v3
@@ -17,7 +26,36 @@ jobs:
           environment-file: environment.yml
           activate-environment: lead_craft_api
           auto-activate-base: false
+          use-only-tar-bz2: true
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          activate-environment: lead_craft_api
+          auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Run tests
-        shell: bash -el {0}
         run: pytest tests/ -v
+
+
