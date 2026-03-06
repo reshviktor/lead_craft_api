@@ -16,6 +16,9 @@ jobs:
 
       - name: Cache conda packages
         uses: actions/cache@v4
+        env:
+          CONDA_PKGS_DIRS: ~/conda_pkgs_dir
+          CACHE_NUMBER: 1
         with:
           path: ~/conda_pkgs_dir
           key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
@@ -25,7 +28,7 @@ jobs:
         with:
           environment-file: environment.yml
           activate-environment: lead_craft_api
-          auto-activate-base: false
+          auto-activate: false
           use-only-tar-bz2: true
       - run: pip install ruff
       - run: ruff check .
@@ -43,6 +46,9 @@ jobs:
 
       - name: Cache conda packages
         uses: actions/cache@v4
+        env:
+          CONDA_PKGS_DIRS: ~/conda_pkgs_dir
+          CACHE_NUMBER: 1
         with:
           path: ~/conda_pkgs_dir
           key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
@@ -52,7 +58,7 @@ jobs:
         with:
           environment-file: environment.yml
           activate-environment: lead_craft_api
-          auto-activate-base: false
+          auto-activate: false
           use-only-tar-bz2: true
 
       - name: Run tests
