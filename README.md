@@ -40,7 +40,10 @@ cd lead_craft_api
 # Create conda environment
 conda env create -f environment.yml
 conda activate lead_craft_api
+
+# Install dependencies that can cause problems
 pip install chembl-webresource-client>=0.10.9
+pip install requests-cache>=1.2.0
 ```
 
 ---
