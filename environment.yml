@@ -17,5 +17,4 @@ dependencies:
   - ipykernel
   - pip
   - pip:
-      - chembl-webresource-client>=0.10.9
       - requests-cache>=1.2.0
