@@ -60,6 +60,8 @@ jobs:
           activate-environment: lead_craft_api
           auto-activate: false
           use-only-tar-bz2: true
+      - run: pip install chembl-webresource-client>=0.10.9
+      - run: pip install requests-cache>=1.2.0
 
       - name: Run tests
         run: pytest tests/ -v
