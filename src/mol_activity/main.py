@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 
 from src.mol_activity.utils.config import DB_PATH
-from src.mol_activity.utils.files_and_SQL_utils import MolecularActivityDatabase
+from database.files_and_SQL_utils import MolecularActivityDatabase
 from src.mol_activity.utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
