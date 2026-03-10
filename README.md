@@ -27,8 +27,8 @@ the planned next steps
 
 ### Prerequisites
 
-- Conda or Miniconda
-- Python ≥3.10
+- Python ≥3.12
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ### Setup
 
@@ -37,13 +37,11 @@ the planned next steps
 git clone https://github.com/reshviktor/lead_craft_api.git
 cd lead_craft_api
 
-# Create conda environment
-conda env create -f environment.yml
-conda activate lead_craft_api
+# Install all dependencies
+uv sync
 
-# Install dependencies that can cause problems
-pip install chembl-webresource-client>=0.10.9
-pip install requests-cache>=1.2.0
+# Or for development tools (ruff, jupyter, etc.)
+uv sync --group dev
 ```
 
 ---
@@ -124,7 +122,7 @@ lead_craft_api/
 ├── notebooks/
 │   └── LeadCraft_example.ipynb               # Interactive demo
 ├── data/                                     # Auto-created folder for SQLite cache
-├── environment.yml                           # Conda environment specification
+├── pyproject.toml                            # Project dependencies (uv/pip)
 └── README.md
 ```
 

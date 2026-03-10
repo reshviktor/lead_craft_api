@@ -11,7 +11,7 @@ from typing import Optional
 
 import pandas as pd
 
-from src.mol_activity.utils.config import DB_PATH
+from src.config import settings
 from database.files_and_SQL_utils import MolecularActivityDatabase
 from src.mol_activity.utils.logging_utils import setup_logging
 
@@ -48,7 +48,7 @@ def basic_query(
     """
     logger.info(f"Starting query pipeline for target: '{target}'")
 
-    path = db_path if db_path is not None else str(DB_PATH)
+    path = db_path if db_path is not None else str(settings.db_path)
     db = MolecularActivityDatabase(path)
 
     results = db.process_query(

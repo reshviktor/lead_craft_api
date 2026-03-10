@@ -7,63 +7,19 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     continue-on-error: true
-    defaults:
-      run:
-        shell: bash -el {0}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Cache conda packages
-        uses: actions/cache@v4
-        env:
-          CONDA_PKGS_DIRS: ~/conda_pkgs_dir
-          CACHE_NUMBER: 1
-        with:
-          path: ~/conda_pkgs_dir
-          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
-
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          environment-file: environment.yml
-          activate-environment: lead_craft_api
-          auto-activate: false
-          use-only-tar-bz2: true
-      - run: pip install ruff
-      - run: ruff check .
-      - run: ruff format --check .
-
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
 
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash -el {0}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Cache conda packages
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --group test
+      - run: uv run pytest tests/ -v
         env:
-          CONDA_PKGS_DIRS: ~/conda_pkgs_dir
-          CACHE_NUMBER: 1
-        with:
-          path: ~/conda_pkgs_dir
-          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
-
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          environment-file: environment.yml
-          activate-environment: lead_craft_api
-          auto-activate: false
-          use-only-tar-bz2: true
-      - run: pip install chembl-webresource-client>=0.10.9
-      - run: pip install requests-cache>=1.2.0
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-
+          PYTHONPATH: ${{ github.workspace }}
